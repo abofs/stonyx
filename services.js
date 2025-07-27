@@ -7,10 +7,10 @@ class Service {
     Service.instance = this;
 
     this.config = ENV;
-    this.log = new Chronicle({ additionalLogs: { title: 'green', ...this.getClassColorConfigs() }});
+    this.log = new Chronicle({ additionalLogs: { title: 'green', ...this.classColorConfigs }});
   }
 
-  getClassColorConfigs() {
+  get classColorConfigs() {
     const colors = {};
 
     for (const [ className, config ] of Object.entries(this.config)) {

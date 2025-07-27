@@ -7,11 +7,7 @@ class Service {
     Service.instance = this;
 
     this.config = ENV;
-    const externalLogConfigs = this.getClassColorConfigs();
-
-    const log = new Chronicle({ additionalLogs: { title: 'green', ...externalLogConfigs }});
-
-    this.log = log;
+    this.log = new Chronicle({ additionalLogs: { title: 'green', ...this.getClassColorConfigs() }});
   }
 
   getClassColorConfigs() {

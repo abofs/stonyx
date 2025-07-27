@@ -17,7 +17,8 @@ class Service {
       if (typeof config !== 'object') continue;
       if (!config.logColor) continue;
 
-      colors[className] = config.logColor;
+      const logMethod = config.logMethod || className;
+      colors[logMethod] = config.logColor;
     }
 
     return colors;

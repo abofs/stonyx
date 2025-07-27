@@ -54,3 +54,17 @@ db: {
 }
 ```
 The above setting will expose the `log.db()` method, which will output in white.
+Alternatively you can provide a `logMethod` setting if you would rather use a different alias that
+does not match the class name.
+
+```js
+// environment.js
+//...
+restServer: {
+  logColor: 'yellow',
+  logMethod: 'api'
+  //...
+}
+```
+
+The above example will expose `log.api()`, which will output in yellow.

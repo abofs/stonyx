@@ -1,7 +1,7 @@
 {
   "name": "stonyx",
   "version": "1.0.0",
-  "description": "Your application description",
+  "description": "Base stonyx framework module",
   "main": "index.js",
   "type": "module",
   "exports": {

@@ -2,10 +2,11 @@
   "name": "stonyx",
   "version": "1.0.0",
   "description": "Base stonyx framework module",
-  "main": "index.js",
+  "main": "main.js",
   "type": "module",
   "exports": {
-    ".": "./services.js",
+    ".": "./main.js",
+    "./services": "./services.js",
     "./resource-handler": "./resource-handler.js",
     "./utils/date": "./utils/date.js",
     "./utils/object": "./utils/object.js",

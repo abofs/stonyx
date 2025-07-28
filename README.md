@@ -33,12 +33,11 @@ The Resource Handler class wraps the `path` and `fs` library to allow consuming 
 | `fullExport` | **Boolean** | *false* | When set to true, The `exports` parameter will be all exports, and not just the default one. |
 | `rawName` | **Boolean** | *false* | When set to true, `forEachFileImport` will not convert the file name to be camelCase and leave it raw instead |
 
-# Third Party Services
-
-`services.js` creates a reusable singleton service for third-party utils. The intention is to allow external modules
-to be re-used and accessed across the application without needing to re-wrap them. 
-
 ## Color Coded Logging via Chronicle
+
+```js
+import { log } from 'stonyx';
+```
 
 Stonyx utilizes our own chronicle library for logging: https://github.com/abofs/chronicle.
 For all Stonyx modules, color coding can be dynamically configured by providing a `logColor` setting in the `environent.js` file.

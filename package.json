@@ -1,0 +1,37 @@
+{
+  "name": "@stonyx/base",
+  "version": "0.0.1",
+  "description": "Base stonyx framework module",
+  "main": "main.js",
+  "type": "module",
+  "exports": {
+    ".": "./main.js",
+    "./services": "./services.js",
+    "./resource-handler": "./resource-handler.js",
+    "./utils/date": "./utils/date.js",
+    "./utils/object": "./utils/object.js",
+    "./utils/promise": "./utils/promise.js",
+    "./utils/string": "./utils/string.js"
+  },
+  "scripts": {
+    "start": "node .",
+    "test": "qunit",
+    "error": "echo \"Error: no error handling\" && exit 1",
+    "postinstall": "cp 'config/environment copy.js' config/environment.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abofs/stonyx.git"
+  },
+  "author": "SynamicD",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/abofs/stonyx/issues"
+  },
+  "devDependencies": {
+    "fs": "^0.0.1-security",
+    "node-chronicle": "^0.2.0",
+    "path": "^0.12.7",
+    "qunit": "^2.23.1"
+  }
+}

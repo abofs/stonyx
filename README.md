@@ -7,36 +7,10 @@ The intention is that this application can be used as a "base" for the Stonyx fr
 node . 
 ```
 
-## Running the test suite
-```
-npm test
-```
-
-## Resource Handler
-
-TODO: Update documentation to instruct a broader audience
-
-The Resource Handler class wraps the `path` and `fs` library to allow consuming classes to manipulate the local file system with full async/await support. Additionally it exposes the `forEachFileImport` method which lets us dynamically and flexibly import dependencies.
-
-### Usage example
-
-```js
-  await forEachFileImport(targetDirectory, (exports, details) => {
-    // Insert logic per export
-  }, options);
-```
-
-### Valid Options
-
-| Option | Type | Default | Description |
-| :---: | :---: | :---: | :--- |
-| `fullExport` | **Boolean** | *false* | When set to true, The `exports` parameter will be all exports, and not just the default one. |
-| `rawName` | **Boolean** | *false* | When set to true, `forEachFileImport` will not convert the file name to be camelCase and leave it raw instead |
-
 ## Color Coded Logging via Chronicle
 
 ```js
-import { log } from '@stonyx/base';
+import log from 'stonyx/log';
 ```
 
 Stonyx utilizes our own chronicle library for logging: https://github.com/abofs/chronicle.
@@ -67,3 +41,11 @@ restServer: {
 ```
 
 The above example will expose `log.api()`, which will output in yellow.
+
+## Module Development
+
+`modules.js` is responsible for dynamically loading any async stonyx modules.
+Conventionally, all official Stonyx modules must be prefixed with `@stonyx/`, and
+contain the `stonyx-module` keyword in its respective `package.json` file.
+
+Async modules require the `stonyx-async` keyword in order to be automatically loaded.

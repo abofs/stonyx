@@ -1,6 +1,6 @@
 {
   "name": "stonyx",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Base stonyx framework module",
   "main": "main.js",
   "type": "module",
@@ -31,6 +31,6 @@
     "node-chronicle": "^0.2.0"
   },
   "devDependencies": {
-    "@stonyx/utils": "^0.0.3"
+    "@stonyx/utils": "^0.0.4"
   }
 }

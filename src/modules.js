@@ -4,7 +4,7 @@
 
 import { readFile } from '@stonyx/utils/file';
 
-export default async (config, rootPath) => {
+export default async (config, rootPath, chronicle) => {
   const modules = [];
   const initPromises = [];
   const rootPackage = await readFile(`${rootPath}/package.json`, { json: true });
@@ -30,12 +30,18 @@ export default async (config, rootPath) => {
     if (!keywords.includes('stonyx-async')) continue;
 
     try {
+
       // Load & Configure Async Modules
       const { default: moduleConfig } = await import(`${rootPath}/node_modules/${moduleName}/config/environment.js`);
 
       const module = moduleName.split('/').pop();
       const userConfig = config[module] || {};
-      config[module] = { ...moduleConfig, ...userConfig };
+      const finalConfig = { ...moduleConfig, ...userConfig };
+      config[module] = finalConfig;
+
+      // Configure module-specific logging
+      const { logColor, logMethod, logTimestamp } = finalConfig;
+      if (logColor) chronicle.defineType(logMethod || module, logColor, { logTimestamp: !!logTimestamp });
   
       const { main: entryPoint } = modulePackage; 
       const { default: moduleClass } = await import(`${rootPath}/node_modules/${moduleName}/${entryPoint}`);

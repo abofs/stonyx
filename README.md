@@ -28,7 +28,8 @@ db: {
 ```
 The above setting will expose the `log.db()` method, which will output in white.
 Alternatively you can provide a `logMethod` setting if you would rather use a different alias that
-does not match the class name.
+does not match the class name, and `logTimestamp` as a true if you wish your log to include timestamp.
+`stonyx/log` fully exposes the `chronicle` object. See Chronicle documentation for more information.
 
 ```js
 // environment.js

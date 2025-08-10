@@ -32,25 +32,37 @@ export default class Stonyx {
     if (!rootPath) throw new Error('Stonyx requires root project\'s path on startup');
 
     this.config = config;
+    this.chronicle = new Chronicle({ additionalLogs: { title: 'green' }});
 
     Stonyx.initialized = true;
 
-    this.modules = await loadModules(config, rootPath);
-    this.chronicle = new Chronicle({ additionalLogs: { title: 'green', ...this.classColorConfigs }});
+    this.modules = await loadModules(config, rootPath, this.chronicle);
+    this.configureUserLogs();
   }
 
-  get classColorConfigs() {
-    const colors = {};
+  /**
+   * Allows users to define their own log for any extra class via environment config
+   * { 
+   *   myClass: {
+   *     logColor: 'purple',
+   *     logMethod: 'highlight'
+   *     logTimestamp: true
+   *   }
+   & }
+   */
+  configureUserLogs() {
+    const { chronicle } = this;
 
     for (const [ className, config ] of Object.entries(this.config)) {
       if (!config || typeof config !== 'object') continue;
-      if (!config.logColor) continue;
+      if (chronicle[className]) continue;
 
-      const logMethod = config.logMethod || className;
-      colors[logMethod] = config.logColor;
+      const { logColor, logMethod, logTimestamp } = config;
+
+      if (!logColor) continue;
+
+      chronicle.defineType(logMethod || className, logColor, { logTimestamp: !!logTimestamp });
     }
-
-    return colors;
   }
   
   static get log() {

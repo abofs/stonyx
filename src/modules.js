@@ -6,8 +6,10 @@ import { readFile } from '@stonyx/utils/file';
 
 export default async (config, rootPath) => {
   const modules = [];
+  const initPromises = [];
   const rootPackage = await readFile(`${rootPath}/package.json`, { json: true });
   const { devDependencies:dependencies } = rootPackage;
+  config.rootPath = rootPath;
 
   for (const moduleName of Object.keys(dependencies)) {
     if (!moduleName.startsWith('@stonyx/')) continue; // All official stonyx modules should be start with "@stonyx/"
@@ -37,11 +39,17 @@ export default async (config, rootPath) => {
   
       const { main: entryPoint } = modulePackage; 
       const { default: moduleClass } = await import(`${rootPath}/node_modules/${moduleName}/${entryPoint}`);
-  
-      modules.push(new moduleClass());
+      const moduleInstance = new moduleClass();
+      
+      modules.push(moduleInstance);
+      if (moduleInstance.init) initPromises.push(moduleInstance.init());
+
     } catch (error) {
       console.error(error);
       throw new Error(`Stonyx modules with async loading must have a config/environment.js file with default configurations.`);
     }
   }
+
+  // Wait until all modules are initialized
+  await Promise.all(initPromises);
 }

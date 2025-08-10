@@ -1,6 +1,6 @@
 {
   "name": "stonyx",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Base stonyx framework module",
   "main": "main.js",
   "type": "module",
@@ -28,7 +28,7 @@
     "url": "https://github.com/abofs/stonyx/issues"
   },
   "dependencies": {
-    "@stonyx/utils": "^0.0.1",
+    "@stonyx/utils": "^0.0.2",
     "node-chronicle": "^0.2.0"
   }
 }

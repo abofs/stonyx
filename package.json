@@ -7,13 +7,14 @@
   "exports": {
     ".": "./src/main.js",
     "./config": "./src/exports/config.js",
-    "./log": "./src/exports/log.js"
+    "./log": "./src/exports/log.js",
+    "./test-helpers": "./src/exports/test-helpers.js"
   },
   "scripts": {
     "start": "node .",
     "test": "qunit",
     "error": "echo \"Error: no error handling\" && exit 1",
-    "postinstall": "echo \"TODO: Postinstall\""
+    "postinstall": "node scripts/postinstall.js"
   },
   "repository": {
     "type": "git",
@@ -28,9 +29,11 @@
     "url": "https://github.com/abofs/stonyx/issues"
   },
   "dependencies": {
-    "node-chronicle": "^0.2.0"
+    "node-chronicle": "^0.2.0",
+    "qunit": "^2.24.1",
+    "sinon": "^21.0.0"
   },
   "devDependencies": {
-    "@stonyx/utils": "^0.1.0"
+    "@stonyx/utils": "file:../stonyx-utils"
   }
 }

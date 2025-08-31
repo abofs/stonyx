@@ -50,3 +50,7 @@ Conventionally, all official Stonyx modules must be prefixed with `@stonyx/`, an
 contain the `stonyx-module` keyword in its respective `package.json` file.
 
 Async modules require the `stonyx-async` keyword in order to be automatically loaded.
+
+## License
+
+Apache — do what you want, just keep attribution.

@@ -20,18 +20,19 @@ Stonyx acts as a **base application host**, allowing you to add official modules
 For standard applications, the **bootstrap file** ensures that the Stonyx framework and all submodules are fully loaded before your application code runs:
 
 ```js
-// index.js
+// index.js - your project's entry point
 import Stonyx from './stonyx-bootstrap.cjs';
-await Stonyx.ready; // Wait until all modules are initialized
+await Stonyx.ready; // wait until all modules are initialized
 
-const { default: App } = await import('./app.js');
+const { default: App } = await import('./app.js'); // your application
 new App();
 ```
 
-### CommonJS Usage
+### CommonJS Bootstrap Helper
+Auto-generated and added to your project post installation
 
 ```js
-// stonyx-bootstrap.cjs (auto-generated and added to your project post installation)
+// stonyx-bootstrap.cjs
 const Stonyx = require('stonyx').default;
 const config = require('./config/environment.js').default;
 

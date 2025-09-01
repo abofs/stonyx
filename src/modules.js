@@ -47,7 +47,7 @@ export default async function(config, rootPath, chronicle) {
   }
 
   // Standalone module configuration
-  if (rootPackage.keywords.includes('stonyx-module')) {
+  if (rootPackage.keywords?.includes('stonyx-module')) {
     configureLog(chronicle, projectName, config);
 
     const { main: entryPoint } = rootPackage; 
@@ -92,7 +92,7 @@ export default async function(config, rootPath, chronicle) {
       initializeModule(moduleName, moduleClass, modules, initPromises);
     } catch (error) {
       console.error(error);
-      throw new Error(`Stonyx modules with async loading must have a config/environment.js file with default configurations.`);
+      throw new Error(`Stonyx modules with async loading must have a config/environment.js file with default configurations. Module "${moduleName}" failed to load.`);
     }
   }
 

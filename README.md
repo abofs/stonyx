@@ -1,56 +1,178 @@
-# stonyx-backend-application
-Main base vanilla application / host module
-The intention is that this application can be used as a "base" for the Stonyx framework
+# Stonyx
 
-## Running the application
-```
-node . 
-```
+**Stonyx** is a lightweight, modular framework for building modern Node.js applications. It provides a **plug-and-play architecture**, centralized color-coded logging, and seamless integration of asynchronous modules, making development faster, cleaner, and more maintainable.
 
-## Color Coded Logging via Chronicle
+### Highlights
+
+* ✅ 100% JavaScript
+* ✅ Drop-in file system for most modules
+* ✅ Don’t even hit the ground — just fly
+* ✅ High performance
+
+Stonyx acts as a **base application host**, allowing you to add official modules (`@stonyx/*`) or your own custom modules without boilerplate initialization.
+
+---
+
+## Quick Start
+
+### ESM Usage (Application Startup)
+
+For standard applications, the **bootstrap file** ensures that the Stonyx framework and all submodules are fully loaded before your application code runs:
 
 ```js
-import log from 'stonyx/log';
+// index.js
+import Stonyx from './stonyx-bootstrap.cjs';
+await Stonyx.ready; // Wait until all modules are initialized
+
+const { default: App } = await import('./app.js');
+new App();
 ```
 
-Stonyx utilizes our own chronicle library for logging: https://github.com/abofs/chronicle.
-For all Stonyx modules, color coding can be dynamically configured by providing a `logColor` setting in the `environent.js` file.
-
-### Example:
+### CommonJS Usage
 
 ```js
-// environment.js
-//...
-db: {
-  logColor: 'white',
-  //...
+// stonyx-bootstrap.cjs (auto-generated and added to your project post installation)
+const Stonyx = require('stonyx').default;
+const config = require('./config/environment.js').default;
+
+new Stonyx(config, __dirname);
+```
+
+---
+
+## Core Features
+
+### 1. **Modular Architecture**
+
+* Automatically detects modules in `devDependencies` prefixed with `@stonyx/`.
+* Supports async initialization with `stonyx-async` modules.
+* Safe module sequencing for submodule development with `waitForModule()`.
+
+### 2. **Color-Coded Logging**
+
+* Centralized logging via [Chronicle](https://github.com/abofs/chronicle).
+* Module-specific logs configurable in `environment.js`:
+
+```js
+restServer: { logColor: 'yellow', logMethod: 'api', logTimestamp: true }
+```
+
+* Create custom logs for any class with minimal configuration.
+
+### 3. **Singleton Design**
+
+* Only one instance of Stonyx exists per project.
+* Ensures consistent access to modules, logs, and configuration.
+
+### 4. **Plug-and-Play Module Loading**
+
+* Modules with `stonyx-module` keyword in `package.json` are auto-initialized.
+* Modules with `stonyx-async` keyword are awaited automatically before usage.
+
+---
+
+## Official Modules
+
+### **[@stonyx/cron](https://github.com/abofs/stonyx-cron)**
+
+Lightweight asynchronous job scheduling utility.
+
+```js
+import Cron from '@stonyx/cron';
+
+const cron = new Cron();
+cron.register('exampleJob', async () => console.log('Job executed!'), 5, true);
+```
+
+* Efficient scheduling using a min-heap.
+* Optional logging via `config.cron`.
+
+---
+
+### **[@stonyx/rest-server](https://github.com/abofs/stonyx-rest-server)**
+
+Dynamic REST server module with auto-route registration.
+
+```js
+import Stonyx from 'stonyx';
+import config from './config/environment.js';
+
+new Stonyx(config);
+```
+
+* Zero configuration for routes: drop request classes into the `requests` directory.
+* Automatic path generation, JSON parsing, and CORS handling.
+* Supports per-route authentication hooks.
+
+---
+
+### **[@stonyx/orm](https://github.com/abofs/stonyx-orm)**
+
+Lightweight ORM with model definitions, relationships, serializers, and optional REST integration.
+
+```js
+import Stonyx from 'stonyx';
+import config from './config/environment.js';
+
+new Stonyx(config);
+
+// Define models
+import { Model, attr, hasMany, belongsTo } from '@stonyx/orm';
+
+class Owner extends Model {
+  id = attr('string');
+  pets = hasMany('animal');
 }
 ```
-The above setting will expose the `log.db()` method, which will output in white.
-Alternatively you can provide a `logMethod` setting if you would rather use a different alias that
-does not match the class name, and `logTimestamp` as a true if you wish your log to include timestamp.
-`stonyx/log` fully exposes the `chronicle` object. See Chronicle documentation for more information.
+
+* Auto-loads models, serializers, transforms, and access classes.
+* Optional JSON file persistence with auto-save intervals.
+* Integrates with `@stonyx/rest-server` for automatic route setup.
+
+---
+
+## Configuration
+
+All modules are configurable via `config/environment.js`:
 
 ```js
-// environment.js
-//...
-restServer: {
-  logColor: 'yellow',
-  logMethod: 'api'
-  //...
-}
+export default {
+  restServer: { logColor: 'yellow', port: 3000 },
+  orm: { logColor: 'white', db: { file: './db.json', autosave: true } },
+  cron: { log: true }
+};
 ```
 
-The above example will expose `log.api()`, which will output in yellow.
+---
 
-## Module Development
+## Running the Application
 
-`modules.js` is responsible for dynamically loading any async stonyx modules.
-Conventionally, all official Stonyx modules must be prefixed with `@stonyx/`, and
-contain the `stonyx-module` keyword in its respective `package.json` file.
+```bash
+node .        # Start the main app
+npm start     # Run using npm script
+```
 
-Async modules require the `stonyx-async` keyword in order to be automatically loaded.
+---
+
+## Developing Submodules
+
+For developers building new Stonyx modules or experimenting with async modules:
+
+```js
+import Stonyx, { waitForModule } from 'stonyx';
+import config from './config/environment.js';
+
+const app = new Stonyx(config, __dirname);
+
+// Wait for specific async module readiness
+await waitForModule('restServer');
+```
+
+* Use `waitForModule()` **only for submodule development**, testing, or when you need to ensure a specific module is fully initialized before continuing.
+* Official modules automatically initialize during normal application startup, so end-users do **not** need to call `waitForModule()`.
+
+---
 
 ## License
 
-Apache — do what you want, just keep attribution.
+Apache 2.0 — do what you want, just keep attribution.

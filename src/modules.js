@@ -4,6 +4,7 @@
  */
 import { readFile } from '@stonyx/utils/file';
 import { kebabCaseToCamelCase } from '@stonyx/utils/string';
+import { mergeObject } from '@stonyx/utils/object';
 
 const modulePromises = {};
 
@@ -80,8 +81,7 @@ export default async function(config, rootPath, chronicle) {
 
       const module = kebabCaseToCamelCase(moduleName.split('/').pop());
       const userConfig = config[module] || {};
-      const finalConfig = { ...moduleConfig, ...userConfig };
-      
+      const finalConfig = mergeObject(moduleConfig, userConfig);
       config[module] = finalConfig;
 
       // Configure module-specific logging

@@ -16,9 +16,11 @@
 
 import Chronicle from 'node-chronicle';
 import loadModules from './modules.js';
+import { kebabCaseToCamelCase } from '@stonyx/utils/string';
 
 export default class Stonyx {
   static initialized = false
+  static modulePromises = {};
 
   constructor(config, rootPath) {
     if (Stonyx.instance) return Stonyx.instance;
@@ -30,6 +32,13 @@ export default class Stonyx {
   async start(config, rootPath) {
     if (!config) throw new Error('Stonyx requires full environment configuration on startup');
     if (!rootPath) throw new Error('Stonyx requires root project\'s path on startup');
+
+    // Transform config from stonyx-modules running as a standalone
+    if (rootPath.includes('stonyx-')) {
+      const moduleName = kebabCaseToCamelCase(rootPath.split('/').pop().replace('stonyx-', ''));
+      config = { [moduleName]: config, ...(config.modules || {}) };
+      delete config.modules;  
+    }
 
     this.config = config;
     this.chronicle = new Chronicle({ additionalLogs: { title: 'green' }});
@@ -77,3 +86,5 @@ export default class Stonyx {
     return Stonyx.instance.config;
   }
 }
+
+export { waitForModule } from './modules.js';

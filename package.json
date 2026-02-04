@@ -14,11 +14,15 @@
     "start": "node .",
     "test": "qunit",
     "error": "echo \"Error: no error handling\" && exit 1",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "prepublishOnly": "npm test"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/abofs/stonyx.git"
+  },
+  "publishConfig": {
+    "provenance": true
   },
   "author": "Stone Costa",
   "license": "Apache-2.0",

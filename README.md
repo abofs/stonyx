@@ -90,6 +90,33 @@ cron.register('exampleJob', async () => console.log('Job executed!'), 5, true);
 
 ---
 
+### **[@stonyx/events](https://github.com/abofs/stonyx-events)**
+
+Lightweight pub/sub event system for application-wide event handling.
+
+```js
+import Events from '@stonyx/events';
+
+const events = new Events();
+
+// Register available events
+events.setup(['userLogin', 'userLogout', 'dataChange']);
+
+// Subscribe to events
+events.subscribe('userLogin', (user) => {
+  console.log(`${user.name} logged in`);
+});
+
+// Emit events
+events.emit('userLogin', { name: 'Alice' });
+```
+
+* Singleton pattern for shared event bus
+* Async support with error isolation
+* Type-safe event registration
+
+---
+
 ### **[@stonyx/rest-server](https://github.com/abofs/stonyx-rest-server)**
 
 Dynamic REST server module with auto-route registration.

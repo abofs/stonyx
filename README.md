@@ -15,29 +15,14 @@ Stonyx acts as a **base application host**, allowing you to add official modules
 
 ## Quick Start
 
-### ESM Usage (Application Startup)
+The Stonyx CLI handles bootstrapping and module initialization automatically:
 
-For standard applications, the **bootstrap file** ensures that the Stonyx framework and all submodules are fully loaded before your application code runs:
-
-```js
-// index.js - your project's entry point
-import Stonyx from './stonyx-bootstrap.cjs';
-await Stonyx.ready; // wait until all modules are initialized
-
-const { default: App } = await import('./app.js'); // your application
-new App();
+```bash
+stonyx serve    # Bootstrap + run app.js (or --entry custom.js)
+stonyx test     # Bootstrap + run test/**/*-test.js
 ```
 
-### CommonJS Bootstrap Helper
-Auto-generated and added to your project post installation
-
-```js
-// stonyx-bootstrap.cjs
-const Stonyx = require('stonyx').default;
-const config = require('./config/environment.js').default;
-
-new Stonyx(config, __dirname);
-```
+No manual bootstrap files or `new Stonyx()` calls needed — the CLI reads `config/environment.js`, initializes all modules, and runs your application.
 
 ---
 
@@ -149,21 +134,18 @@ export default {
 ## Running the Application
 
 ```bash
-node .        # Start the main app
-npm start     # Run using npm script
+stonyx serve          # Start the app (loads app.js by default)
+stonyx serve --entry custom.js  # Start with a custom entry point
 ```
 
 ---
 
 ## Developing Submodules
 
-For developers building new Stonyx modules or experimenting with async modules:
+For developers building new Stonyx modules, the CLI handles initialization. Use `waitForModule()` if your module depends on another async module:
 
 ```js
-import Stonyx, { waitForModule } from 'stonyx';
-import config from './config/environment.js';
-
-const app = new Stonyx(config, __dirname);
+import { waitForModule } from 'stonyx';
 
 // Wait for specific async module readiness
 await waitForModule('restServer');

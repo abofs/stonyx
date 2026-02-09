@@ -4,11 +4,15 @@
   "description": "Base stonyx framework module",
   "main": "main.js",
   "type": "module",
+  "bin": {
+    "stonyx": "./src/cli.js"
+  },
   "exports": {
     ".": "./src/main.js",
     "./config": "./src/exports/config.js",
     "./log": "./src/exports/log.js",
-    "./test-helpers": "./src/exports/test-helpers.js"
+    "./test-helpers": "./src/exports/test-helpers.js",
+    "./lifecycle": "./src/lifecycle.js"
   },
   "scripts": {
     "start": "node .",
@@ -32,7 +36,7 @@
     "node-chronicle": "^0.2.0"
   },
   "devDependencies": {
-    "@stonyx/utils": "^0.2.2",
+    "@stonyx/utils": "file:../stonyx-utils",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
   }

@@ -4,8 +4,7 @@ const {
   NODE_ENV,
 } = process.env;
 
-const isTest = typeof QUnit !== 'undefined';
-const environment = isTest ? 'test' : (NODE_ENV ?? 'development');
+const environment = NODE_ENV ?? 'development';
 
 export default {
   environment,

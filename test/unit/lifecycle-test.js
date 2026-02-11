@@ -4,6 +4,12 @@ import { runStartupHooks, runShutdownHooks } from '../../src/lifecycle.js';
 const { module, test } = QUnit;
 
 module('[Unit] Lifecycle', function() {
+  test('stonyx/lifecycle exports runStartupHooks and runShutdownHooks as functions', async function(assert) {
+    const lifecycle = await import('stonyx/lifecycle');
+    assert.equal(typeof lifecycle.runStartupHooks, 'function', 'runStartupHooks is a function');
+    assert.equal(typeof lifecycle.runShutdownHooks, 'function', 'runShutdownHooks is a function');
+  });
+
   module('runStartupHooks', function() {
     test('calls startup() on modules that define it', async function(assert) {
       const calls = [];

@@ -1,5 +1,16 @@
 import { runStartupHooks, runShutdownHooks } from '../lifecycle.js';
 
+export function createShutdownHandler(modules) {
+  let shuttingDown = false;
+  return async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    await runShutdownHooks(modules);
+    process.exit(0);
+  };
+}
+
 export default async function serve({ args }) {
   const cwd = process.cwd();
   const entryFlag = args.indexOf('--entry');
@@ -14,15 +25,7 @@ export default async function serve({ args }) {
   const { modules } = Stonyx.instance;
   await runStartupHooks(modules);
 
-  let shuttingDown = false;
-
-  const shutdown = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-
-    await runShutdownHooks(modules);
-    process.exit(0);
-  };
+  const shutdown = createShutdownHandler(modules);
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);

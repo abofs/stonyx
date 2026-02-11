@@ -5,6 +5,8 @@ import test from './cli/test.js';
 import help from './cli/help.js';
 import loadModuleCommands from './cli/load-commands.js';
 
+try { process.loadEnvFile(); } catch { /* no .env file */ }
+
 const aliases = { s: 'serve', t: 'test', h: 'help' };
 
 const builtInCommands = {

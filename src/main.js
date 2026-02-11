@@ -17,6 +17,7 @@
 import Chronicle from 'node-chronicle';
 import loadModules from './modules.js';
 import { kebabCaseToCamelCase } from '@stonyx/utils/string';
+import { mergeObject } from '@stonyx/utils/object';
 
 export default class Stonyx {
   static initialized = false
@@ -44,6 +45,16 @@ export default class Stonyx {
     this.chronicle = new Chronicle({ additionalLogs: { title: 'green' }});
 
     Stonyx.initialized = true;
+
+    // Auto-merge test environment overrides (after initialized flag, before modules load)
+    // Uses in-place mutation to preserve existing references (e.g. stonyx/config export cache)
+    if (process.env.NODE_ENV === 'test') {
+      try {
+        const { default: testOverrides } = await import(`${rootPath}/test/config/environment.js`);
+        const merged = mergeObject(config, testOverrides);
+        Object.assign(config, merged);
+      } catch { /* no test overrides found */ }
+    }
 
     this.modules = await loadModules(config, rootPath, this.chronicle);
     this.configureUserLogs();

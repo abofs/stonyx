@@ -1,0 +1,121 @@
+# Framework Modules
+
+When to use which `@stonyx/*` module. Always check these before reaching for Node built-ins or npm packages.
+
+## `stonyx/log`
+
+All logging goes through `stonyx/log`. Never use `console.log`, `console.warn`, or `console.error`.
+
+```js
+import log from 'stonyx/log';
+
+log.info('Server started');
+log.error('Connection failed', error);
+```
+
+Custom log types can be configured in `config/environment.js`:
+
+```js
+export default {
+  socket: { logColor: 'magenta' }
+}
+```
+
+## `@stonyx/utils`
+
+Utility library organized by domain. Always check here before using Node built-ins or adding npm dependencies.
+
+### File I/O (`@stonyx/utils/file`)
+
+**`fs` is explicitly prohibited.** Use these instead:
+
+- `createFile(filePath, data, options?)` — write a new file (creates parent dirs)
+- `updateFile(filePath, data, options?)` — atomic update via swap file
+- `copyFile(sourcePath, targetPath, options?)` — copy with optional overwrite
+- `readFile(filePath, options?)` — read file, supports `{ json: true }` and `{ missingFileCallback }`
+- `deleteFile(filePath, options?)` — delete file, supports `{ ignoreAccessFailure: true }`
+- `createDirectory(dir)` — recursive mkdir
+- `deleteDirectory(dir)` — recursive rm
+- `forEachFileImport(dir, callback, options?)` — iterate and dynamically import all `.js` files in a directory
+- `fileExists(filePath)` — check existence
+
+### Object Manipulation (`@stonyx/utils/object`)
+
+- `deepCopy(obj)` — deep clone via JSON
+- `objToJson(obj, format?)` — stringify with formatting
+- `makeArray(obj)` — wrap in array if not already
+- `mergeObject(obj1, obj2, options?)` — deep merge objects, supports `{ ignoreNewKeys: true }`
+- `get(obj, path)` — dot-path property access (e.g., `get(obj, 'a.b.c')`)
+- `getOrSet(map, key, defaultValue)` — get from Map or set default (supports factory functions)
+
+### String Transforms (`@stonyx/utils/string`)
+
+- `kebabCaseToCamelCase(str)` — `'my-thing'` → `'myThing'`
+- `kebabCaseToPascalCase(str)` — `'my-thing'` → `'MyThing'`
+- `camelCaseToKebabCase(str)` — `'myThing'` → `'my-thing'`
+- `generateRandomString(length?)` — alphanumeric random string (default 8 chars)
+- `pluralize(str)` — basic pluralization
+
+### Date / Timestamp (`@stonyx/utils/date`)
+
+- `getTimestamp(dateObject?)` — Unix timestamp in seconds (current time if no arg)
+
+### Promises (`@stonyx/utils/promise`)
+
+- `sleep(seconds)` — async delay
+
+### Interactive Prompts (`@stonyx/utils/prompt`)
+
+- `confirm(question)` — yes/no prompt, returns boolean
+- `prompt(question)` — free-text input, returns string
+
+File issues on `stonyx-utils` for any gaps rather than adding workarounds or npm dependencies.
+
+## `@stonyx/events`
+
+All pub/sub event handling. Never create custom event emitters.
+
+- `setup(eventNames)` — register valid event names
+- `subscribe(event, callback)` — listen for events
+- `once(event, callback)` — single-fire listener
+- `unsubscribe(event, callback)` — remove listener
+- `emit(event, ...args)` — fire event
+- `clear(event)` / `reset()` — cleanup
+
+## `@stonyx/cron`
+
+All scheduled and interval tasks. Never use raw `setInterval` or `setTimeout` for recurring work.
+
+- `register(key, callback, interval, runOnInit?)` — schedule a recurring job
+- `unregister(key)` — cancel a job
+
+Configurable via `config/environment.js`:
+
+```js
+export default {
+  cron: { log: true }
+}
+```
+
+## `@stonyx/sockets`
+
+WebSocket handlers. Class ordering: static properties → `server()` method → `client()` method.
+
+Exports: `SocketServer`, `SocketClient`, `Handler`, `Sockets`
+
+## `@stonyx/oauth`
+
+OAuth providers. Class ordering: constructor with `super()` → async methods → transform methods.
+
+Key methods: `getAuthorizationUrl()`, `handleCallback()`, `getSession()`, `logout()`
+
+## `@abofs/code-conventions`
+
+Shared lint and formatting config. Import and spread; never define local rules.
+
+Exports:
+- `@abofs/code-conventions/eslint` — ESLint config
+- `@abofs/code-conventions/prettier` — Prettier config
+- `@abofs/code-conventions/eslint-ember` — Ember-specific ESLint
+- `@abofs/code-conventions/template-lint` — Template linting
+- `@abofs/code-conventions/lint-staged` — Lint-staged config

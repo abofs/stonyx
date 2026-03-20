@@ -3,15 +3,17 @@
 import serve from './cli/serve.js';
 import test from './cli/test.js';
 import help from './cli/help.js';
+import newCommand from './cli/new.js';
 import loadModuleCommands from './cli/load-commands.js';
 
 try { process.loadEnvFile(); } catch { /* no .env file */ }
 
-const aliases = { s: 'serve', t: 'test', h: 'help' };
+const aliases = { s: 'serve', t: 'test', h: 'help', n: 'new' };
 
 const builtInCommands = {
   serve: { description: 'Bootstrap Stonyx and run the app', run: serve },
   test: { description: 'Bootstrap Stonyx in test mode and run tests', run: test },
+  new: { description: 'Scaffold a new Stonyx project', run: newCommand },
   help: { description: 'Show available commands', run: help }
 };
 

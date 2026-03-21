@@ -1,5 +1,7 @@
 # Stonyx CLI Guide
 
+See [docs/index.md](../docs/index.md) for full documentation including conventions, modules, lifecycle, and API reference.
+
 ## Installation
 
 Stonyx is the core framework package. The CLI is provided by the `stonyx` binary defined in `package.json`.

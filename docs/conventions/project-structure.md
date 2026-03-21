@@ -40,8 +40,7 @@ Flat file structure at root level — non-directory project files live at the pr
 | `requests/` | REST request handlers | When using `@stonyx/rest-server` |
 | `crons/` | Scheduled tasks | When using `@stonyx/cron` |
 | `clients/` | External API clients | When fetching external data |
-| `resources/` | Business logic resources | As needed |
-| `test/` | Tests | Always |
+| `test/`| Tests | Always |
 | `utils.js` or `utils/` | Project-specific reusable logic | As needed (never duplicate `@stonyx/utils`) |
 
 ### Nested Model Directories

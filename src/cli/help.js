@@ -25,5 +25,24 @@ export default async function help({ args, builtInCommands, loadModuleCommands }
     }
   }
 
-  console.log('\nAliases: s=serve, t=test, h=help\n');
+  console.log('\nAliases: s=serve, t=test, n=new, h=help\n');
+
+  console.log('Project conventions:\n');
+  console.log('  Entry point:       app.js');
+  console.log('  Config:            config/environment.js');
+  console.log('  DB schema:         config/db-schema.js');
+  console.log('  Models:            models/');
+  console.log('  Serializers:       serializers/');
+  console.log('  Access control:    access/');
+  console.log('  Transforms:        transforms/');
+  console.log('  Hooks:             hooks/');
+  console.log('  REST requests:     requests/');
+  console.log('  Cron jobs:         crons/');
+  console.log('  Tests:             test/{unit,integration,acceptance}/');
+  console.log('');
+  console.log('  Logging:           import log from \'stonyx/log\' (never console.log)');
+  console.log('  Utilities:         import from \'@stonyx/utils/*\' (never raw fs)');
+  console.log('  Lint config:       import from \'@abofs/code-conventions\'');
+  console.log('  Package manager:   pnpm');
+  console.log('');
 }

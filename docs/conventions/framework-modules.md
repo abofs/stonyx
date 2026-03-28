@@ -103,6 +103,12 @@ WebSocket handlers. Class ordering: static properties → `server()` method → 
 
 Exports: `SocketServer`, `SocketClient`, `Handler`, `Sockets`
 
+## `@stonyx/discord`
+
+Discord bot with command and event handler auto-discovery. Class ordering: static properties → `data` / `static event` → `execute()` / `handle()`.
+
+Exports: `DiscordBot`, `Command`, `EventHandler`, `Discord`, `chunkMessage`
+
 ## `@stonyx/oauth`
 
 OAuth providers. Class ordering: constructor with `super()` → async methods → transform methods.

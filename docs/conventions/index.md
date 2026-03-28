@@ -20,4 +20,5 @@ Universal rules that apply to every Stonyx project. Section-specific conventions
 - [Framework Modules](./framework-modules.md) — when to use which `@stonyx/*` module
 - [ORM Conventions](./orm-conventions.md) — models, serializers, access control, transforms, hooks
 - [REST Conventions](./rest-conventions.md) — REST server request classes and handlers
+- [Discord Conventions](./discord-conventions.md) — Discord bot commands and event handlers
 - [Testing Conventions](./testing-conventions.md) — test organization, patterns, and tooling

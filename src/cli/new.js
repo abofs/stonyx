@@ -33,6 +33,11 @@ const MODULE_OPTIONS = [
   {
     question: 'Will this project need pub/sub events?',
     package: '@stonyx/events'
+  },
+  {
+    question: 'Will this project need a Discord bot?',
+    package: '@stonyx/discord',
+    dirs: ['discord-commands', 'discord-events']
   }
 ];
 

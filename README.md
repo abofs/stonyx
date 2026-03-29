@@ -5,19 +5,23 @@
 - 100% JavaScript (ES Modules)
 - Drop-in module system — no boilerplate
 - Automatic async module loading and initialization
-- Built-in CLI for bootstrapping and testing
+- Built-in CLI for scaffolding, bootstrapping, and testing
 
 ## Quick Start
 
 ```bash
-npm install stonyx
+npm install -g stonyx
+stonyx new my-app
+cd my-app
+stonyx serve
 ```
 
-The CLI handles everything — no manual `new Stonyx()` calls needed:
+The `new` command walks you through module selection and generates a ready-to-run project. From there, the CLI handles bootstrapping:
 
 ```bash
 stonyx serve    # Bootstrap + run app.js
 stonyx test     # Bootstrap + run tests
+stonyx help     # Show all available commands
 ```
 
 Stonyx reads `config/environment.js`, initializes all `@stonyx/*` modules from your `devDependencies`, and runs your application.
@@ -40,8 +44,12 @@ Stonyx reads `config/environment.js`, initializes all `@stonyx/*` modules from y
 | Module | Description |
 |--------|-------------|
 | [@stonyx/cron](https://github.com/abofs/stonyx-cron) | Lightweight async job scheduling |
-| [@stonyx/rest-server](https://github.com/abofs/stonyx-rest-server) | Dynamic REST server with auto-route registration |
+| [@stonyx/discord](https://github.com/abofs/stonyx-discord) | Discord bot with command and event handler auto-discovery |
+| [@stonyx/events](https://github.com/abofs/stonyx-events) | Pub/sub event system |
+| [@stonyx/oauth](https://github.com/abofs/stonyx-oauth) | OAuth provider integration |
 | [@stonyx/orm](https://github.com/abofs/stonyx-orm) | ORM with models, relationships, and serializers |
+| [@stonyx/rest-server](https://github.com/abofs/stonyx-rest-server) | Dynamic REST server with auto-route registration |
+| [@stonyx/sockets](https://github.com/abofs/stonyx-sockets) | WebSocket server and client |
 
 ## License
 

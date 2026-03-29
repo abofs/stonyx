@@ -72,7 +72,11 @@ await waitForModule('rest-server'); // Waits for @stonyx/rest-server
 | Module | Description |
 |--------|-------------|
 | [@stonyx/cron](https://github.com/abofs/stonyx-cron) | Lightweight async job scheduling with min-heap |
-| [@stonyx/rest-server](https://github.com/abofs/stonyx-rest-server) | Dynamic REST server with auto-route registration |
+| [@stonyx/discord](https://github.com/abofs/stonyx-discord) | Discord bot with command and event handler auto-discovery |
+| [@stonyx/events](https://github.com/abofs/stonyx-events) | Pub/sub event system |
+| [@stonyx/oauth](https://github.com/abofs/stonyx-oauth) | OAuth provider integration |
 | [@stonyx/orm](https://github.com/abofs/stonyx-orm) | ORM with models, relationships, serializers, and optional REST integration |
+| [@stonyx/rest-server](https://github.com/abofs/stonyx-rest-server) | Dynamic REST server with auto-route registration |
+| [@stonyx/sockets](https://github.com/abofs/stonyx-sockets) | WebSocket server and client |
 
 See each module's repository for its specific documentation.

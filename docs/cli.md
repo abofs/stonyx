@@ -12,9 +12,19 @@ stonyx <command> [...args]
 
 | Command | Alias | Description |
 |---------|-------|-------------|
+| `new` | `n` | Scaffold a new Stonyx project |
 | `serve` | `s` | Bootstrap Stonyx and run the app |
 | `test` | `t` | Bootstrap Stonyx in test mode and run tests |
 | `help` | `h` | Show available commands |
+
+### new
+
+Scaffolds a new Stonyx project in the current directory. Prompts for a project name and which modules to include, then generates the project structure and runs `pnpm install`.
+
+```bash
+stonyx new              # Prompts for project name
+stonyx new my-app       # Creates my-app/ in the current directory
+```
 
 ### serve
 

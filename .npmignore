@@ -3,5 +3,6 @@ test/
 
 # config
 .nvmrc
+
 # git
 .git

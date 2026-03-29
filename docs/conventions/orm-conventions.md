@@ -156,3 +156,35 @@ export default class DBModel extends Model {
 ```
 
 Located at `config/db-schema.js`, referenced from `config/environment.js`.
+
+## Store
+
+The store is the in-memory data layer. Use it for internal app logic (not REST API consumers).
+
+```js
+import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
+
+// Read — sync, from memory (requires memory: true on model, which is the default)
+const record = store.get('animal', 1);
+const allAnimals = store.data.get('animals');
+
+// Read — async, queries DB if memory: false
+const record = await store.find('animal', 1);
+const all = await store.findAll('animal');
+
+// Create — adds to store and returns the record
+const animal = createRecord('animal', { type: 'dog', age: 3, owner: 'angela' });
+
+// Update — patches fields on an existing record
+updateRecord(animal, { age: 4 });
+
+// Delete
+store.remove('animal', 1);
+
+// Persist to disk — required when not using REST-triggered autosave
+await Orm.db.save();
+```
+
+**When to use `Orm.db.save()`**: The `autosave: 'onUpdate'` config only triggers on REST POST/PATCH/DELETE. When modifying data directly via `createRecord` / `updateRecord` in app code (not through REST), call `Orm.db.save()` explicitly to persist.
+
+**Store vs REST**: Use `store` for internal app logic (session tracking, state management). Use REST request handlers for external API consumers. Both operate on the same in-memory data.

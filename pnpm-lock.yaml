@@ -8,13 +8,13 @@ importers:
 
   .:
     dependencies:
+      '@stonyx/utils':
+        specifier: 0.2.3-beta.5
+        version: 0.2.3-beta.5
       node-chronicle:
         specifier: ^0.2.0
         version: 0.2.0
     devDependencies:
-      '@stonyx/utils':
-        specifier: 0.2.3-beta.7
-        version: 0.2.3-beta.7
       qunit:
         specifier: ^2.24.1
         version: 2.25.0

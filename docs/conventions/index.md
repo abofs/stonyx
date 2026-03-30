@@ -18,6 +18,7 @@ Universal rules that apply to every Stonyx project. Section-specific conventions
 
 - [Project Structure](./project-structure.md) — directory layout, file organization, config conventions
 - [Framework Modules](./framework-modules.md) — when to use which `@stonyx/*` module
+- [Cron Conventions](./cron-conventions.md) — scheduling, job model, CronService API, ORM data model
 - [ORM Conventions](./orm-conventions.md) — models, serializers, access control, transforms, hooks
 - [REST Conventions](./rest-conventions.md) — REST server request classes and handlers
 - [Discord Conventions](./discord-conventions.md) — Discord bot commands and event handlers

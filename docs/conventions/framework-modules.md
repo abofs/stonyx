@@ -86,8 +86,21 @@ All pub/sub event handling. Never create custom event emitters.
 
 All scheduled and interval tasks. Never use raw `setInterval` or `setTimeout` for recurring work.
 
+**Legacy API** — simple recurring callbacks:
+
 - `register(key, callback, interval, runOnInit?)` — schedule a recurring job
 - `unregister(key)` — cancel a job
+
+**Advanced API** (`@stonyx/cron/service`) — full scheduling with CRUD, run history, and AI normalization:
+
+- `add(input)` / `get(id)` / `update(id, patch)` / `remove(id)` / `list(opts?)` — CRUD
+- `run(id, mode?)` — manual execution (`'force'` or `'due'`)
+- `runs(id, limit?)` — run history
+- `onJobDue` — callback for job execution
+
+Three schedule kinds: `every` (interval), `cron` (expression), `at` (one-shot).
+
+See [Cron Conventions](./cron-conventions.md) for full details.
 
 Configurable via `config/environment.js`:
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import Chronicle from 'node-chronicle';
+import Chronicle from '@stonyx/logs';
 import loadModules from './modules.js';
 import { kebabCaseToCamelCase } from '@stonyx/utils/string';
 import { mergeObject } from '@stonyx/utils/object';

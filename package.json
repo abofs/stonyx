@@ -1,6 +1,6 @@
 {
   "name": "stonyx",
-  "version": "0.2.3-beta.23",
+  "version": "0.2.3-beta.24",
   "description": "Base stonyx framework module",
   "main": "main.js",
   "type": "module",

@@ -4,7 +4,7 @@ When to use which `@stonyx/*` module. Always check these before reaching for Nod
 
 ## `stonyx/log`
 
-All logging goes through `stonyx/log`. Never use `console.log`, `console.warn`, or `console.error`.
+All logging goes through `stonyx/log` (see universal rules in [conventions index](./index.md)).
 
 ```js
 import log from 'stonyx/log';
@@ -26,8 +26,6 @@ export default {
 Utility library organized by domain. Always check here before using Node built-ins or adding npm dependencies.
 
 ### File I/O (`@stonyx/utils/file`)
-
-**`fs` is explicitly prohibited.** Use these instead:
 
 - `createFile(filePath, data, options?)` — write a new file (creates parent dirs)
 - `updateFile(filePath, data, options?)` — atomic update via swap file

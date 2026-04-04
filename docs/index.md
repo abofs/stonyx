@@ -10,6 +10,11 @@
 - [Testing](testing.md) — Running tests, config overrides, and integration helpers
 - [Developing Modules](developing-modules.md) — Guide for building custom Stonyx modules
 
+## Conventions
+
+- [Conventions](conventions/index.md) — Universal rules and module-specific conventions
+
 ## Reference
 
 - [API Reference](api.md) — Public exports and class documentation
+- [Release](release.md) — Release process

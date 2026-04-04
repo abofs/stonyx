@@ -44,6 +44,7 @@ Stonyx reads `config/environment.js`, initializes all `@stonyx/*` modules from y
 | Module | Description |
 |--------|-------------|
 | [@stonyx/cron](https://github.com/abofs/stonyx-cron) | Lightweight async job scheduling |
+| [@stonyx/discord](https://github.com/abofs/stonyx-discord) | Discord bot with command and event handler auto-discovery |
 | [@stonyx/events](https://github.com/abofs/stonyx-events) | Pub/sub event system |
 | [@stonyx/oauth](https://github.com/abofs/stonyx-oauth) | OAuth provider integration |
 | [@stonyx/orm](https://github.com/abofs/stonyx-orm) | ORM with models, relationships, and serializers |

@@ -1,3 +1,7 @@
+[![CI](https://github.com/abofs/stonyx/actions/workflows/ci.yml/badge.svg)](https://github.com/abofs/stonyx/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/stonyx.svg)](https://www.npmjs.com/package/stonyx)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 # Stonyx
 
 **Stonyx** is a lightweight, modular framework for building modern Node.js applications. It provides a plug-and-play architecture, centralized color-coded logging, and seamless async module integration.

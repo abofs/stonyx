@@ -25,6 +25,11 @@
     "type": "git",
     "url": "git+https://github.com/abofs/stonyx.git"
   },
+  "files": [
+    "src",
+    "config",
+    "README.md"
+  ],
   "publishConfig": {
     "provenance": true
   },

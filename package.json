@@ -1,6 +1,6 @@
 {
   "name": "stonyx",
-  "version": "0.2.3-beta.36",
+  "version": "0.2.3-beta.37",
   "description": "Base stonyx framework module",
   "main": "main.js",
   "type": "module",
@@ -42,7 +42,7 @@
     "url": "https://github.com/abofs/stonyx/issues"
   },
   "dependencies": {
-    "@stonyx/utils": "0.2.3-beta.17",
+    "@stonyx/utils": "0.2.3-beta.18",
     "@stonyx/logs": "1.0.1-beta.11"
   },
   "devDependencies": {

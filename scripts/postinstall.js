@@ -10,6 +10,6 @@ const envFile = 'environment.js';
 
 createDirectory(configDir);
 
-copyFile(`./config/environment copy.js`, `${configDir}/${envFile}`).then(result => {
+copyFile(`./config/environment.example.js`, `${configDir}/${envFile}`).then(result => {
   if (result) console.log(`Stonyx: ${envFile} has been successfully created. Please see README.md for more information.`);
 });

@@ -32,7 +32,18 @@ export default async function serve({ args }) {
 
   const entryModule = await import(`${cwd}/${entryPoint}`);
 
+  let appInstance;
   if (entryModule.default) {
-    new entryModule.default();
+    appInstance = new entryModule.default();
+  }
+
+  // Include the app instance in shutdown if it has a shutdown method
+  if (appInstance && typeof appInstance.shutdown === 'function') {
+    const originalShutdown = shutdown;
+    const appShutdown = createShutdownHandler([...modules, appInstance]);
+    process.removeListener('SIGTERM', originalShutdown);
+    process.removeListener('SIGINT', originalShutdown);
+    process.on('SIGTERM', appShutdown);
+    process.on('SIGINT', appShutdown);
   }
 }

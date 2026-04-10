@@ -1,4 +1,12 @@
-export default async function help({ args, builtInCommands, loadModuleCommands } = {}) {
+import type { CommandDefinition } from './load-commands.js';
+
+interface HelpOptions {
+  args?: string[];
+  builtInCommands?: Record<string, CommandDefinition>;
+  loadModuleCommands?: () => Promise<Record<string, CommandDefinition>>;
+}
+
+export default async function help({ args, builtInCommands, loadModuleCommands }: HelpOptions = {}): Promise<void> {
   console.log('\nUsage: stonyx <command> [...args]\n');
   console.log('Commands:\n');
 

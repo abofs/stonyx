@@ -18,27 +18,35 @@ import Chronicle from '@stonyx/logs';
 import loadModules from './modules.js';
 import { kebabCaseToCamelCase } from '@stonyx/utils/string';
 import { mergeObject } from '@stonyx/utils/object';
+import type { StoynxModule } from './lifecycle.js';
+import type { StoynxConfig } from './modules.js';
 
 export default class Stonyx {
-  static initialized = false
-  static modulePromises = {};
+  static initialized = false;
+  static modulePromises: Record<string, unknown> = {};
+  static instance: Stonyx;
+  static ready: Promise<void>;
 
-  constructor(config, rootPath) {
+  config!: StoynxConfig;
+  chronicle!: Chronicle;
+  modules!: StoynxModule[];
+
+  constructor(config: StoynxConfig, rootPath: string) {
     if (Stonyx.instance) return Stonyx.instance;
 
     Stonyx.instance = this;
     Stonyx.ready = this.start(config, rootPath);
   }
 
-  async start(config, rootPath) {
+  async start(config: StoynxConfig, rootPath: string): Promise<void> {
     if (!config) throw new Error('Stonyx requires full environment configuration on startup');
     if (!rootPath) throw new Error('Stonyx requires root project\'s path on startup');
 
     // Transform config from stonyx-modules running as a standalone
     if (rootPath.includes('stonyx-')) {
-      const moduleName = kebabCaseToCamelCase(rootPath.split('/').pop().replace('stonyx-', ''));
-      config = { [moduleName]: config, ...(config.modules || {}) };
-      delete config.modules;  
+      const moduleName = kebabCaseToCamelCase(rootPath.split('/').pop()!.replace('stonyx-', ''));
+      config = { [moduleName]: config, ...((config as Record<string, unknown>).modules as Record<string, unknown> || {}) };
+      delete (config as Record<string, unknown>).modules;
     }
 
     this.config = config;
@@ -51,7 +59,7 @@ export default class Stonyx {
     if (process.env.NODE_ENV === 'test') {
       try {
         const { default: testOverrides } = await import(`${rootPath}/test/config/environment.js`);
-        const merged = mergeObject(config, testOverrides);
+        const merged = mergeObject(config as Record<string, unknown>, testOverrides);
         Object.assign(config, merged);
       } catch { /* no test overrides found */ }
     }
@@ -62,36 +70,29 @@ export default class Stonyx {
 
   /**
    * Allows users to define their own log for any extra class via environment config
-   * { 
-   *   myClass: {
-   *     logColor: 'purple',
-   *     logMethod: 'highlight'
-   *     logTimestamp: true
-   *   }
-   & }
    */
-  configureUserLogs() {
+  configureUserLogs(): void {
     const { chronicle } = this;
 
     for (const [ className, config ] of Object.entries(this.config)) {
       if (!config || typeof config !== 'object') continue;
-      if (chronicle[className]) continue;
+      if ((chronicle as unknown as Record<string, unknown>)[className]) continue;
 
-      const { logColor, logMethod, logTimestamp } = config;
+      const { logColor, logMethod, logTimestamp } = config as Record<string, unknown>;
 
       if (!logColor) continue;
 
-      chronicle.defineType(logMethod || className, logColor, { logTimestamp: !!logTimestamp });
+      chronicle.defineType((logMethod as string) || className, logColor as string, { logTimestamp: !!logTimestamp });
     }
   }
-  
-  static get log() {
+
+  static get log(): Chronicle {
     if (!Stonyx.initialized) throw new Error('Stonyx has not been initialized yet');
 
     return Stonyx.instance.chronicle;
   }
 
-  static get config() {
+  static get config(): StoynxConfig {
     if (!Stonyx.initialized) throw new Error('Stonyx has not been initialized yet');
 
     return Stonyx.instance.config;

@@ -2,21 +2,39 @@
   "name": "stonyx",
   "version": "0.2.3-beta.37",
   "description": "Base stonyx framework module",
-  "main": "main.js",
+  "main": "dist/main.js",
+  "types": "dist/main.d.ts",
   "type": "module",
   "bin": {
-    "stonyx": "./src/cli.js"
+    "stonyx": "./dist/cli.js"
   },
   "exports": {
-    ".": "./src/main.js",
-    "./config": "./src/exports/config.js",
-    "./log": "./src/exports/log.js",
-    "./test-helpers": "./src/exports/test-helpers.js",
-    "./lifecycle": "./src/lifecycle.js"
+    ".": {
+      "types": "./dist/main.d.ts",
+      "default": "./dist/main.js"
+    },
+    "./config": {
+      "types": "./dist/exports/config.d.ts",
+      "default": "./dist/exports/config.js"
+    },
+    "./log": {
+      "types": "./dist/exports/log.d.ts",
+      "default": "./dist/exports/log.js"
+    },
+    "./test-helpers": {
+      "types": "./dist/exports/test-helpers.d.ts",
+      "default": "./dist/exports/test-helpers.js"
+    },
+    "./lifecycle": {
+      "types": "./dist/lifecycle.d.ts",
+      "default": "./dist/lifecycle.js"
+    }
   },
   "scripts": {
+    "build": "tsc",
+    "build:test": "tsc -p tsconfig.test.json",
     "start": "node .",
-    "test": "qunit",
+    "test": "pnpm build && pnpm build:test && qunit 'dist-test/test/**/*-test.js'",
     "error": "echo \"Error: no error handling\" && exit 1",
     "postinstall": "node scripts/postinstall.js",
     "prepublishOnly": "npm test"
@@ -26,7 +44,7 @@
     "url": "git+https://github.com/abofs/stonyx.git"
   },
   "files": [
-    "src",
+    "dist",
     "config",
     "README.md"
   ],
@@ -46,7 +64,11 @@
     "@stonyx/logs": "1.0.1-beta.11"
   },
   "devDependencies": {
+    "@types/node": "^25.5.2",
+    "@types/qunit": "^2.19.13",
+    "@types/sinon": "^21.0.1",
     "qunit": "^2.24.1",
-    "sinon": "^21.0.0"
+    "sinon": "^21.0.0",
+    "typescript": "^5.8.3"
   }
 }

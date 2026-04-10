@@ -4,7 +4,14 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const MODULE_OPTIONS = [
+interface ModuleOption {
+  question: string;
+  package: string;
+  dirs?: string[];
+  files?: Record<string, () => string>;
+}
+
+const MODULE_OPTIONS: ModuleOption[] = [
   {
     question: 'Will this project need a REST server?',
     package: '@stonyx/rest-server',
@@ -41,7 +48,7 @@ const MODULE_OPTIONS = [
   }
 ];
 
-function generateDbSchema() {
+function generateDbSchema(): string {
   return `import { Model, hasMany } from '@stonyx/orm';
 
 export default class DBModel extends Model {
@@ -51,8 +58,8 @@ export default class DBModel extends Model {
 `;
 }
 
-function generatePackageJson(name, selectedModules) {
-  const devDependencies = { stonyx: 'latest' };
+function generatePackageJson(name: string, selectedModules: ModuleOption[]): string {
+  const devDependencies: Record<string, string> = { stonyx: 'latest' };
 
   for (const mod of selectedModules) {
     devDependencies[mod.package] = 'latest';
@@ -76,7 +83,7 @@ function generatePackageJson(name, selectedModules) {
   }, null, 2) + '\n';
 }
 
-function generateAppJs() {
+function generateAppJs(): string {
   return `import log from 'stonyx/log';
 
 export default class App {
@@ -98,13 +105,13 @@ export default class App {
 `;
 }
 
-function generateEnvironmentJs() {
+function generateEnvironmentJs(): string {
   return `export default {
 }
 `;
 }
 
-function generateEnvironmentExampleJs() {
+function generateEnvironmentExampleJs(): string {
   return `// Copy this file to environment.js and fill in your values
 // All values should use environment variables with ?? fallback defaults
 
@@ -119,7 +126,7 @@ export default {
 `;
 }
 
-function generateGitignore() {
+function generateGitignore(): string {
   return `node_modules/
 .env
 db.json
@@ -127,7 +134,7 @@ db.json
 `;
 }
 
-function runPnpmInstall(projectDir) {
+function runPnpmInstall(projectDir: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn('pnpm', ['install'], {
       cwd: projectDir,
@@ -143,7 +150,7 @@ function runPnpmInstall(projectDir) {
   });
 }
 
-export default async function newCommand({ args }) {
+export default async function newCommand({ args }: { args: string[] }): Promise<void> {
   let appName = args[0];
 
   if (!appName) {
@@ -165,7 +172,7 @@ export default async function newCommand({ args }) {
   console.log(`\nScaffolding new Stonyx project: ${appName}\n`);
 
   // Prompt for module selection
-  const selectedModules = [];
+  const selectedModules: ModuleOption[] = [];
 
   for (const mod of MODULE_OPTIONS) {
     if (await confirm(mod.question)) {

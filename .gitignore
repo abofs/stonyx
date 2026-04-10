@@ -12,6 +12,11 @@ config/environment.js
 *.vsix%
 *DS_Store*
 
+# build output
+dist/
+dist-test/
+.ts-migration-log.json
+
 # npm auth (never commit tokens)
 .npmrc
 package-lock.json

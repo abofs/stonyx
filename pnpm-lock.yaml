@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@stonyx/logs':
-        specifier: 1.0.1-beta.11
-        version: 1.0.1-beta.11
+        specifier: 1.0.1-beta.12
+        version: 1.0.1-beta.12
       '@stonyx/utils':
         specifier: 0.2.3-beta.18
         version: 0.2.3-beta.18
@@ -45,8 +45,8 @@ packages:
   '@sinonjs/samsam@8.0.3':
     resolution: {integrity: sha512-hw6HbX+GyVZzmaYNh82Ecj1vdGZrqVIn/keDTg63IgAwiQPO+xCz99uG6Woqgb4tM0mUiFENKZ4cqd7IX94AXQ==}
 
-  '@stonyx/logs@1.0.1-beta.11':
-    resolution: {integrity: sha512-BDQiszUUT6ik8CIM55tPe/GwikHGN4/bHgwyT+d11GIANCmsIrT0SotS4eB08TpeW4OVUtCfNS8VztZAIDqKHA==}
+  '@stonyx/logs@1.0.1-beta.12':
+    resolution: {integrity: sha512-lSHYvM4VnWl9W3kj46ujk4U6xPDF0uAxaozGTMLyXfb5b9oAVbnXvbJVUqtkdOQbOHUKHOlP07WlWsZy8mrSyw==}
 
   '@stonyx/utils@0.2.3-beta.18':
     resolution: {integrity: sha512-PzhEHphhq4kGxIWRLuka9AzrSQ0SxM5UbkEH2JigKidA8nomf19sjhLPalxlCuomJsA5Hm3T+RUFZvO4yj3fag==}
@@ -135,7 +135,7 @@ snapshots:
       '@sinonjs/commons': 3.0.1
       type-detect: 4.1.0
 
-  '@stonyx/logs@1.0.1-beta.11':
+  '@stonyx/logs@1.0.1-beta.12':
     dependencies:
       chalk: 5.6.2
 

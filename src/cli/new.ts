@@ -26,7 +26,7 @@ const MODULE_OPTIONS: ModuleOption[] = [
     question: 'Will this project need data management?',
     package: '@stonyx/orm',
     dirs: ['models', 'serializers', 'access', 'transforms', 'hooks'],
-    files: { 'config/db-schema.js': generateDbSchema }
+    files: { 'config/db-schema.ts': generateDbSchema }
   },
   {
     question: 'Will this project need scheduled tasks (cron)?',
@@ -48,18 +48,21 @@ const MODULE_OPTIONS: ModuleOption[] = [
   }
 ];
 
-function generateDbSchema(): string {
-  return `import { Model, hasMany } from '@stonyx/orm';
+export function generateDbSchema(): string {
+  return `import { Model, hasMany, type HasMany } from '@stonyx/orm';
 
 export default class DBModel extends Model {
   // Define your collections here
-  // examples = hasMany('example');
+  // examples: HasMany = hasMany('example');
 }
 `;
 }
 
-function generatePackageJson(name: string, selectedModules: ModuleOption[]): string {
-  const devDependencies: Record<string, string> = { stonyx: 'latest' };
+export function generatePackageJson(name: string, selectedModules: ModuleOption[]): string {
+  const devDependencies: Record<string, string> = {
+    stonyx: 'latest',
+    typescript: '^5.8.3'
+  };
 
   for (const mod of selectedModules) {
     devDependencies[mod.package] = 'latest';
@@ -76,6 +79,7 @@ function generatePackageJson(name: string, selectedModules: ModuleOption[]): str
     type: 'module',
     private: true,
     scripts: {
+      build: 'tsc',
       start: 'stonyx serve',
       test: 'stonyx test'
     },
@@ -83,10 +87,13 @@ function generatePackageJson(name: string, selectedModules: ModuleOption[]): str
   }, null, 2) + '\n';
 }
 
-function generateAppJs(): string {
+export function generateAppTs(): string {
   return `import log from 'stonyx/log';
 
 export default class App {
+  static instance: App;
+  ready: Promise<void>;
+
   constructor() {
     if (App.instance) return App.instance;
     App.instance = this;
@@ -94,7 +101,7 @@ export default class App {
     this.ready = this.init();
   }
 
-  async init() {
+  async init(): Promise<void> {
     log.info('Initializing Application');
 
     // Application setup here
@@ -105,33 +112,58 @@ export default class App {
 `;
 }
 
-function generateEnvironmentJs(): string {
+export function generateEnvironmentTs(): string {
   return `export default {
 }
 `;
 }
 
-function generateEnvironmentExampleJs(): string {
-  return `// Copy this file to environment.js and fill in your values
+export function generateEnvironmentExampleTs(): string {
+  return `// Copy this file to environment.ts and fill in your values
 // All values should use environment variables with ?? fallback defaults
 
 const {
   NODE_ENV,
 } = process.env;
 
-const environment = NODE_ENV ?? 'development';
+const environment: string = NODE_ENV ?? 'development';
 
 export default {
 }
 `;
 }
 
-function generateGitignore(): string {
+export function generateGitignore(): string {
   return `node_modules/
 .env
 db.json
 *.log
+
+# Compiled TypeScript output (tsc compiles .ts to .js in-place)
+*.js
+*.d.ts
+*.js.map
+# Keep test config (JavaScript)
+!test/**/*.js
 `;
+}
+
+export function generateTsConfig(): string {
+  return JSON.stringify({
+    compilerOptions: {
+      strict: true,
+      target: 'ES2022',
+      module: 'NodeNext',
+      moduleResolution: 'NodeNext',
+      outDir: '.',
+      rootDir: '.',
+      esModuleInterop: true,
+      skipLibCheck: true,
+      forceConsistentCasingInFileNames: true
+    },
+    include: ['**/*.ts'],
+    exclude: ['node_modules', 'test']
+  }, null, 2) + '\n';
 }
 
 function runPnpmInstall(projectDir: string): Promise<void> {
@@ -195,12 +227,13 @@ export default async function newCommand({ args }: { args: string[] }): Promise<
 
   // Generate core files
   await createFile(path.join(projectDir, 'package.json'), generatePackageJson(appName, selectedModules));
-  await createFile(path.join(projectDir, 'app.js'), generateAppJs());
+  await createFile(path.join(projectDir, 'app.ts'), generateAppTs());
+  await createFile(path.join(projectDir, 'tsconfig.json'), generateTsConfig());
   await createFile(path.join(projectDir, '.gitignore'), generateGitignore());
 
   // Create config directory and files
-  await createFile(path.join(projectDir, 'config', 'environment.js'), generateEnvironmentJs());
-  await createFile(path.join(projectDir, 'config', 'environment.example.js'), generateEnvironmentExampleJs());
+  await createFile(path.join(projectDir, 'config', 'environment.ts'), generateEnvironmentTs());
+  await createFile(path.join(projectDir, 'config', 'environment.example.ts'), generateEnvironmentExampleTs());
 
   // Create module-specific directories and files
   for (const mod of selectedModules) {

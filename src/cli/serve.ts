@@ -14,7 +14,7 @@ export function createShutdownHandler(modules: StoynxModule[]): () => Promise<vo
 export default async function serve({ args }: { args: string[] }): Promise<void> {
   const cwd = process.cwd();
   const entryFlag = args.indexOf('--entry');
-  const entryPoint = entryFlag !== -1 ? args[entryFlag + 1] : 'app.js';
+  const entryPoint = (entryFlag !== -1 && entryFlag + 1 < args.length) ? args[entryFlag + 1] : 'app.js';
 
   const { default: config } = await import(`${cwd}/config/environment.js`);
   const { default: Stonyx } = await import('../main.js');

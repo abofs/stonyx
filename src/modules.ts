@@ -50,9 +50,9 @@ export default async function loadModules(
 ): Promise<StoynxModule[]> {
   const modules: StoynxModule[] = [];
   const initPromises: Promise<void>[] = [];
-  const rootPackage = await readFile(`${rootPath}/package.json`, { json: true }) as Record<string, Record<string, unknown> & string>;
-  const dependencies = rootPackage.devDependencies as Record<string, string>;
-  const projectName = rootPackage.name as unknown as string;
+  const rootPackage = await readFile(`${rootPath}/package.json`, { json: true }) as Record<string, unknown>;
+  const dependencies = (rootPackage.devDependencies || {}) as Record<string, string>;
+  const projectName = typeof rootPackage.name === 'string' ? rootPackage.name : '';
 
   // Expose rootPath to public configuration
   config.rootPath = rootPath;
@@ -69,12 +69,12 @@ export default async function loadModules(
   }
 
   // Standalone module configuration
-  if ((rootPackage.keywords as unknown as string[])?.includes('stonyx-module')) {
+  if (Array.isArray(rootPackage.keywords) && rootPackage.keywords.includes('stonyx-module')) {
     configureLog(chronicle, projectName, config as Record<string, unknown>);
 
-    const entryPoint = rootPackage.main as unknown as string;
+    const entryPoint = typeof rootPackage.main === 'string' ? rootPackage.main : '';
     const { default: moduleClass } = await import(`${rootPath}/${entryPoint}`);
-    initializeModule(rootPackage.name as unknown as string, moduleClass, modules, initPromises);
+    initializeModule(projectName, moduleClass, modules, initPromises);
   }
 
   for (const moduleName of moduleDependencies) {
@@ -85,7 +85,7 @@ export default async function loadModules(
 
     if (!modulePackage) continue;
 
-    const keywords = modulePackage.keywords as string[];
+    const keywords = Array.isArray(modulePackage.keywords) ? modulePackage.keywords as string[] : [];
 
     if (!keywords.includes('stonyx-module')) {
       console.warn(`Warning: Stonyx modules must contain the "stonyx-module" keyword. Module was not loaded`);
@@ -101,7 +101,7 @@ export default async function loadModules(
       // Load & Configure Async Modules
       const { default: moduleConfig } = await import(`${rootPath}/node_modules/${moduleName}/config/environment.js`);
 
-      const module = kebabCaseToCamelCase(moduleName.split('/').pop()!);
+      const module = kebabCaseToCamelCase(moduleName.split('/').pop() ?? moduleName);
       const userConfig = (config[module] as Record<string, unknown>) || {};
       const finalConfig = mergeObject(moduleConfig, userConfig);
       config[module] = finalConfig;

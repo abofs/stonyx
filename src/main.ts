@@ -44,7 +44,8 @@ export default class Stonyx {
 
     // Transform config from stonyx-modules running as a standalone
     if (rootPath.includes('stonyx-')) {
-      const moduleName = kebabCaseToCamelCase(rootPath.split('/').pop()!.replace('stonyx-', ''));
+      const dirName = rootPath.split('/').pop() ?? '';
+      const moduleName = kebabCaseToCamelCase(dirName.replace('stonyx-', ''));
       config = { [moduleName]: config, ...((config as Record<string, unknown>).modules as Record<string, unknown> || {}) };
       delete (config as Record<string, unknown>).modules;
     }
@@ -76,7 +77,7 @@ export default class Stonyx {
 
     for (const [ className, config ] of Object.entries(this.config)) {
       if (!config || typeof config !== 'object') continue;
-      if ((chronicle as unknown as Record<string, unknown>)[className]) continue;
+      if (className in chronicle) continue;
 
       const { logColor, logMethod, logTimestamp } = config as Record<string, unknown>;
 

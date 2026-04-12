@@ -44,6 +44,7 @@ export default async function loadModuleCommands(): Promise<Record<string, Comma
 
     try {
       const commandsModule = await import(path.join(cwd, 'node_modules', moduleName, moduleExports['./commands']));
+      if (!commandsModule.default || typeof commandsModule.default !== 'object') continue;
       const moduleCommands = commandsModule.default as Record<string, CommandDefinition>;
 
       for (const [name, command] of Object.entries(moduleCommands)) {

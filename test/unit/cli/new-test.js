@@ -78,4 +78,19 @@ module('[Unit] CLI New — TypeScript Blueprints', function () {
     assert.ok(output.includes('type HasMany'), 'imports HasMany type');
     assert.ok(output.includes('HasMany = hasMany'), 'uses type annotation in comment example');
   });
+
+  test('generatePackageJson includes selected module dependencies sorted alphabetically', function (assert) {
+    const modules = [
+      { question: '', package: '@stonyx/sockets' },
+      { question: '', package: '@stonyx/orm' }
+    ];
+    const output = generatePackageJson('test-app', modules);
+    const pkg = JSON.parse(output);
+    const depNames = Object.keys(pkg.devDependencies);
+
+    assert.ok(pkg.devDependencies['@stonyx/sockets'], 'includes sockets');
+    assert.ok(pkg.devDependencies['@stonyx/orm'], 'includes orm');
+    assert.deepEqual(depNames, [...depNames].sort(), 'dependencies sorted alphabetically');
+  });
+
 });

@@ -1,6 +1,6 @@
 {
   "name": "stonyx",
-  "version": "0.2.3-beta.42",
+  "version": "0.2.3-beta.43",
   "description": "Base stonyx framework module",
   "main": "dist/main.js",
   "types": "dist/main.d.ts",
@@ -61,7 +61,7 @@
   },
   "dependencies": {
     "@stonyx/utils": "0.2.3-beta.19",
-    "@stonyx/logs": "1.0.1-beta.12"
+    "@stonyx/logs": "1.0.1-beta.13"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

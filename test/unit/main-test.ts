@@ -1,3 +1,4 @@
+import QUnit from 'qunit';
 
 //import log from 'stonyx/log';
 
@@ -9,7 +10,7 @@ module('[Unit] Main', function() {
       await import('stonyx/config');
     } catch (error) {
       console.log(error);
-      assert.equal(error.message, 'Stonyx has not been initialized yet');
+      assert.equal((error as Error).message, 'Stonyx has not been initialized yet');
     }
   });
 
@@ -18,7 +19,7 @@ module('[Unit] Main', function() {
       await import('stonyx/log');
     } catch (error) {
       console.log(error);
-      assert.equal(error.message, 'Stonyx has not been initialized yet');
+      assert.equal((error as Error).message, 'Stonyx has not been initialized yet');
     }
   });
 });

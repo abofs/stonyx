@@ -12,8 +12,8 @@ importers:
         specifier: 1.0.1-beta.14
         version: 1.0.1-beta.14
       '@stonyx/utils':
-        specifier: 0.2.3-beta.21
-        version: 0.2.3-beta.21
+        specifier: 0.2.3-beta.22
+        version: 0.2.3-beta.22
     devDependencies:
       '@types/node':
         specifier: ^25.5.2
@@ -48,8 +48,8 @@ packages:
   '@stonyx/logs@1.0.1-beta.14':
     resolution: {integrity: sha512-JavawY6XU3YMOpHowtHXWX80O2il9WeMU4JvV4oGDGpX+10aosRlCpNrcliTuW8EJSYX1/az+hENKlob9158bg==}
 
-  '@stonyx/utils@0.2.3-beta.21':
-    resolution: {integrity: sha512-iKwdc0Ghu5QxDgFZYPwuisUUR9Lzngd+EsaV8Q/KOCA5ulxTWPD7g5/Eg1XMT5v4kipWwkSs1krhup5ZFlR7pg==}
+  '@stonyx/utils@0.2.3-beta.22':
+    resolution: {integrity: sha512-VNEL+BnWBYL3qRiQB4fXiKlTPCRRRzgc7T93RmdZuMy8kfZ/t5LYQy2N+CnvHUigUmap/3KykJ0heDsjB8dh/w==}
 
   '@types/node@25.5.2':
     resolution: {integrity: sha512-tO4ZIRKNC+MDWV4qKVZe3Ql/woTnmHDr5JD8UI5hn2pwBrHEwOEMZK7WlNb5RKB6EoJ02gwmQS9OrjuFnZYdpg==}
@@ -139,7 +139,7 @@ snapshots:
     dependencies:
       chalk: 5.6.2
 
-  '@stonyx/utils@0.2.3-beta.21': {}
+  '@stonyx/utils@0.2.3-beta.22': {}
 
   '@types/node@25.5.2':
     dependencies:

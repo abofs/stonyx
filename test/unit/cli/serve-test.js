@@ -1,6 +1,6 @@
 import QUnit from 'qunit';
 import sinon from 'sinon';
-import serve, { createShutdownHandler } from '../../../src/cli/serve.js';
+import serve, { createShutdownHandler, maybeRegisterAppShutdown } from '../../../src/cli/serve.js';
 
 const { module, test } = QUnit;
 
@@ -56,6 +56,64 @@ module('[Unit] CLI Serve', function(hooks) {
 
       assert.ok(exitStub.calledOnce, 'process.exit called once');
       assert.ok(exitStub.calledWith(0), 'process.exit called with 0');
+    });
+  });
+
+  module('serve() handler registration', function(hooks) {
+    let onStub;
+    let removeListenerStub;
+    const originalShutdown = async () => {};
+
+    hooks.beforeEach(function() {
+      onStub = sinon.stub(process, 'on');
+      removeListenerStub = sinon.stub(process, 'removeListener');
+    });
+
+    test('re-registers handlers when entry module has shutdown()', function(assert) {
+      const modules = [];
+      const appInstance = { shutdown: async () => {} };
+
+      maybeRegisterAppShutdown(modules, appInstance, originalShutdown);
+
+      assert.ok(
+        removeListenerStub.calledWith('SIGTERM', originalShutdown),
+        'removed original SIGTERM listener'
+      );
+      assert.ok(
+        removeListenerStub.calledWith('SIGINT', originalShutdown),
+        'removed original SIGINT listener'
+      );
+      assert.equal(removeListenerStub.callCount, 2, 'removeListener called exactly twice');
+
+      const sigtermCalls = onStub.getCalls().filter(c => c.args[0] === 'SIGTERM');
+      const sigintCalls = onStub.getCalls().filter(c => c.args[0] === 'SIGINT');
+      assert.equal(sigtermCalls.length, 1, 'new SIGTERM handler registered');
+      assert.equal(sigintCalls.length, 1, 'new SIGINT handler registered');
+      assert.notStrictEqual(
+        sigtermCalls[0].args[1],
+        originalShutdown,
+        'new SIGTERM handler is not the original shutdown closure'
+      );
+    });
+
+    test('does NOT re-register when entry module lacks shutdown()', function(assert) {
+      const modules = [];
+      const appInstance = {};
+
+      maybeRegisterAppShutdown(modules, appInstance, originalShutdown);
+
+      assert.equal(removeListenerStub.callCount, 0, 'removeListener was not called');
+      assert.equal(onStub.callCount, 0, 'process.on was not called');
+    });
+
+    test('does NOT re-register when entry module has no default export', function(assert) {
+      const modules = [];
+      const appInstance = undefined;
+
+      maybeRegisterAppShutdown(modules, appInstance, originalShutdown);
+
+      assert.equal(removeListenerStub.callCount, 0, 'removeListener was not called');
+      assert.equal(onStub.callCount, 0, 'process.on was not called');
     });
   });
 });

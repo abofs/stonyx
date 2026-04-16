@@ -11,6 +11,26 @@ export function createShutdownHandler(modules: StoynxModule[]): () => Promise<vo
   };
 }
 
+export function maybeRegisterAppShutdown(
+  modules: StoynxModule[],
+  appInstance: unknown,
+  originalShutdown: () => Promise<void>
+): void {
+  if (
+    appInstance &&
+    typeof (appInstance as { shutdown?: unknown }).shutdown === 'function'
+  ) {
+    const appShutdown = createShutdownHandler([
+      ...modules,
+      appInstance as { shutdown?: () => Promise<void> }
+    ]);
+    process.removeListener('SIGTERM', originalShutdown);
+    process.removeListener('SIGINT', originalShutdown);
+    process.on('SIGTERM', appShutdown);
+    process.on('SIGINT', appShutdown);
+  }
+}
+
 export default async function serve({ args }: { args: string[] }): Promise<void> {
   const cwd = process.cwd();
   const entryFlag = args.indexOf('--entry');
@@ -32,7 +52,10 @@ export default async function serve({ args }: { args: string[] }): Promise<void>
 
   const entryModule = await import(`${cwd}/${entryPoint}`);
 
+  let appInstance: { shutdown?: () => Promise<void> } | undefined;
   if (entryModule.default) {
-    new entryModule.default();
+    appInstance = new entryModule.default();
   }
+
+  maybeRegisterAppShutdown(modules, appInstance, shutdown);
 }

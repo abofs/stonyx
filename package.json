@@ -62,7 +62,7 @@
   },
   "dependencies": {
     "@stonyx/utils": "0.2.3-beta.22",
-    "@stonyx/logs": "1.0.1-beta.14"
+    "@stonyx/logs": "1.0.1-beta.16"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

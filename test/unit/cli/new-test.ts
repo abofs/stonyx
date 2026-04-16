@@ -84,7 +84,7 @@ module('[Unit] CLI New — TypeScript Blueprints', function () {
       { question: '', package: '@stonyx/sockets' },
       { question: '', package: '@stonyx/orm' }
     ];
-    const output = generatePackageJson('test-app', modules);
+    const output = generatePackageJson('test-app', modules as Parameters<typeof generatePackageJson>[1]);
     const pkg = JSON.parse(output);
     const depNames = Object.keys(pkg.devDependencies);
 

@@ -1,6 +1,7 @@
 import QUnit from 'qunit';
-import sinon from 'sinon';
+import sinon, { type SinonStub } from 'sinon';
 import serve, { createShutdownHandler, maybeRegisterAppShutdown } from '../../../src/cli/serve.js';
+import type { StoynxModule } from '../../../src/lifecycle.js';
 
 const { module, test } = QUnit;
 
@@ -22,10 +23,10 @@ module('[Unit] CLI Serve', function(hooks) {
     test('calls shutdown() on modules that define it', async function(assert) {
       sinon.stub(process, 'exit');
 
-      const calls = [];
-      const modules = [
-        { shutdown: async () => calls.push('a') },
-        { shutdown: async () => calls.push('b') }
+      const calls: string[] = [];
+      const modules: StoynxModule[] = [
+        { shutdown: async () => { calls.push('a'); } },
+        { shutdown: async () => { calls.push('b'); } }
       ];
 
       const handler = createShutdownHandler(modules);
@@ -39,7 +40,7 @@ module('[Unit] CLI Serve', function(hooks) {
       sinon.stub(process, 'exit');
 
       let callCount = 0;
-      const modules = [{ shutdown: async () => callCount++ }];
+      const modules: StoynxModule[] = [{ shutdown: async () => { callCount++; } }];
 
       const handler = createShutdownHandler(modules);
       await handler();
@@ -49,7 +50,7 @@ module('[Unit] CLI Serve', function(hooks) {
     });
 
     test('calls process.exit(0) after shutdown hooks complete', async function(assert) {
-      const exitStub = sinon.stub(process, 'exit');
+      const exitStub: SinonStub = sinon.stub(process, 'exit');
 
       const handler = createShutdownHandler([]);
       await handler();
@@ -60,9 +61,9 @@ module('[Unit] CLI Serve', function(hooks) {
   });
 
   module('serve() handler registration', function(hooks) {
-    let onStub;
-    let removeListenerStub;
-    const originalShutdown = async () => {};
+    let onStub: SinonStub;
+    let removeListenerStub: SinonStub;
+    const originalShutdown = async (): Promise<void> => {};
 
     hooks.beforeEach(function() {
       onStub = sinon.stub(process, 'on');
@@ -70,8 +71,8 @@ module('[Unit] CLI Serve', function(hooks) {
     });
 
     test('re-registers handlers when entry module has shutdown()', function(assert) {
-      const modules = [];
-      const appInstance = { shutdown: async () => {} };
+      const modules: StoynxModule[] = [];
+      const appInstance = { shutdown: async (): Promise<void> => {} };
 
       maybeRegisterAppShutdown(modules, appInstance, originalShutdown);
 
@@ -97,7 +98,7 @@ module('[Unit] CLI Serve', function(hooks) {
     });
 
     test('does NOT re-register when entry module lacks shutdown()', function(assert) {
-      const modules = [];
+      const modules: StoynxModule[] = [];
       const appInstance = {};
 
       maybeRegisterAppShutdown(modules, appInstance, originalShutdown);
@@ -107,7 +108,7 @@ module('[Unit] CLI Serve', function(hooks) {
     });
 
     test('does NOT re-register when entry module has no default export', function(assert) {
-      const modules = [];
+      const modules: StoynxModule[] = [];
       const appInstance = undefined;
 
       maybeRegisterAppShutdown(modules, appInstance, originalShutdown);

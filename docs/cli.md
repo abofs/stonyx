@@ -26,6 +26,53 @@ stonyx new              # Prompts for project name
 stonyx new my-app       # Creates my-app/ in the current directory
 ```
 
+Scaffolded projects are TypeScript-first: every consumer-authored source file is `.ts`, with a root `tsconfig.json`, and `tsx`/`typescript` in `devDependencies`.
+
+Generated layout (minimal — additional directories appear per the modules you select):
+
+```
+my-app/
+├── app.ts
+├── config/
+│   ├── environment.ts
+│   └── environment.example.ts
+├── test/
+│   ├── setup.ts           # Bootstraps Stonyx via await Stonyx.ready (Sprint 44 pattern)
+│   ├── zz-exit-test.ts    # runEnd hook that drains the event loop after tests
+│   ├── config/
+│   │   └── environment.ts
+│   ├── unit/
+│   ├── integration/
+│   └── acceptance/
+├── package.json
+├── tsconfig.json
+└── .gitignore
+```
+
+The scaffolded `package.json` uses the Sprint 44 test pattern:
+
+```json
+{
+  "scripts": {
+    "build": "tsc",
+    "serve": "stonyx serve",
+    "start": "stonyx serve",
+    "test": "NODE_ENV=test node --import tsx/esm --import ./test/setup.ts node_modules/qunit/bin/qunit.js 'test/**/*-test.ts'"
+  }
+}
+```
+
+`config/environment.ts` is scaffolded with a typed default export so new projects get type-checking out of the box:
+
+```ts
+import type { StoynxConfig } from 'stonyx';
+
+const config: StoynxConfig = {
+};
+
+export default config;
+```
+
 ### serve
 
 Bootstraps Stonyx (loads config, initializes modules, runs lifecycle hooks), then imports your application entry point.

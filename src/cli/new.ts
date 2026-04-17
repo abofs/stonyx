@@ -60,7 +60,9 @@ export default class DBModel extends Model {
 
 export function generatePackageJson(name: string, selectedModules: ModuleOption[]): string {
   const devDependencies: Record<string, string> = {
+    qunit: '^2.24.1',
     stonyx: 'latest',
+    tsx: '^4.21.0',
     typescript: '^5.8.3'
   };
 
@@ -80,8 +82,9 @@ export function generatePackageJson(name: string, selectedModules: ModuleOption[
     private: true,
     scripts: {
       build: 'tsc',
+      serve: 'stonyx serve',
       start: 'stonyx serve',
-      test: 'stonyx test'
+      test: "NODE_ENV=test node --import tsx/esm --import ./test/setup.ts node_modules/qunit/bin/qunit.js 'test/**/*-test.ts'"
     },
     devDependencies: sorted
   }, null, 2) + '\n';
@@ -113,8 +116,56 @@ export default class App {
 }
 
 export function generateEnvironmentTs(): string {
-  return `export default {
+  return `import type { StoynxConfig } from 'stonyx';
+
+const config: StoynxConfig = {
+};
+
+export default config;
+`;
 }
+
+export function generateTestEnvironmentTs(): string {
+  return `import type { StoynxConfig } from 'stonyx';
+
+// Test-specific config overrides
+const config: Partial<StoynxConfig> = {
+};
+
+export default config;
+`;
+}
+
+export function generateSetupTs(): string {
+  return `// Test setup: bootstrap Stonyx with the consumer config before qunit runs.
+// Sprint 44 pattern — loaded via \`node --import ./test/setup.ts\`.
+import { pathToFileURL } from 'url';
+
+const cwd = process.cwd();
+
+const { default: Stonyx } = await import('stonyx');
+const { default: config } = await import(pathToFileURL(\`\${cwd}/config/environment.ts\`).href);
+
+new Stonyx(config, cwd);
+
+await Stonyx.ready;
+`;
+}
+
+export function generateZzExitTestTs(): string {
+  return `// Force-exit hook for qunit runs.
+//
+// Stonyx modules may keep listeners/servers open that would otherwise
+// block the process from exiting after tests complete, causing CI to
+// hit timeouts even though all tests passed.
+//
+// Named \`zz-\` so alphabetical test-file order places it last, after
+// all real test files have registered with QUnit.
+import QUnit from 'qunit';
+
+QUnit.on('runEnd', () => {
+  setImmediate(() => process.exit(process.exitCode ?? 0));
+});
 `;
 }
 
@@ -143,8 +194,6 @@ db.json
 *.js
 *.d.ts
 *.js.map
-# Keep test config (JavaScript)
-!test/**/*.js
 `;
 }
 
@@ -182,38 +231,16 @@ function runPnpmInstall(projectDir: string): Promise<void> {
   });
 }
 
-export default async function newCommand({ args }: { args: string[] }): Promise<void> {
-  let appName = args[0];
-
-  if (!appName) {
-    appName = await prompt('Project name:');
-  }
-
-  if (!appName) {
-    console.error('Project name is required.');
-    process.exit(1);
-  }
-
-  const projectDir = path.resolve(process.cwd(), appName);
-
-  if (await fileExists(projectDir)) {
-    console.error(`Directory "${appName}" already exists.`);
-    process.exit(1);
-  }
-
-  console.log(`\nScaffolding new Stonyx project: ${appName}\n`);
-
-  // Prompt for module selection
-  const selectedModules: ModuleOption[] = [];
-
-  for (const mod of MODULE_OPTIONS) {
-    if (await confirm(mod.question)) {
-      selectedModules.push(mod);
-    }
-  }
-
-  console.log('\nCreating project structure...\n');
-
+/**
+ * Write every scaffolded file to disk given a resolved project directory,
+ * app name, and pre-selected module options. Factored out of `newCommand`
+ * so tests can exercise the file-writing path without interactive prompts.
+ */
+export async function scaffoldProject(
+  projectDir: string,
+  appName: string,
+  selectedModules: ModuleOption[]
+): Promise<void> {
   // Create project directory
   await createDirectory(projectDir);
 
@@ -260,8 +287,47 @@ export default async function newCommand({ args }: { args: string[] }): Promise<
   await createDirectory(path.join(projectDir, 'test', 'acceptance'));
   await createFile(path.join(projectDir, 'test', 'acceptance', '.gitkeep'), '');
 
-  // Create test config
-  await createFile(path.join(projectDir, 'test', 'config', 'environment.js'), `export default {\n  // Test-specific config overrides\n}\n`);
+  // Create test config (TS)
+  await createFile(path.join(projectDir, 'test', 'config', 'environment.ts'), generateTestEnvironmentTs());
+
+  // Create Sprint 44 test harness files (setup bootstraps Stonyx, zz-exit-test drains event loop)
+  await createFile(path.join(projectDir, 'test', 'setup.ts'), generateSetupTs());
+  await createFile(path.join(projectDir, 'test', 'zz-exit-test.ts'), generateZzExitTestTs());
+}
+
+export default async function newCommand({ args }: { args: string[] }): Promise<void> {
+  let appName = args[0];
+
+  if (!appName) {
+    appName = await prompt('Project name:');
+  }
+
+  if (!appName) {
+    console.error('Project name is required.');
+    process.exit(1);
+  }
+
+  const projectDir = path.resolve(process.cwd(), appName);
+
+  if (await fileExists(projectDir)) {
+    console.error(`Directory "${appName}" already exists.`);
+    process.exit(1);
+  }
+
+  console.log(`\nScaffolding new Stonyx project: ${appName}\n`);
+
+  // Prompt for module selection
+  const selectedModules: ModuleOption[] = [];
+
+  for (const mod of MODULE_OPTIONS) {
+    if (await confirm(mod.question)) {
+      selectedModules.push(mod);
+    }
+  }
+
+  console.log('\nCreating project structure...\n');
+
+  await scaffoldProject(projectDir, appName, selectedModules);
 
   console.log('Installing dependencies...\n');
 

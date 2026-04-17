@@ -105,3 +105,4 @@ export default class Stonyx {
 }
 
 export { waitForModule } from './modules.js';
+export type { StoynxConfig } from './modules.js';

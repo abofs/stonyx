@@ -5,7 +5,9 @@ import test from './cli/test.js';
 import help from './cli/help.js';
 import newCommand from './cli/new.js';
 import loadModuleCommands from './cli/load-commands.js';
+import { importConfig } from './util/import-config.js';
 import type { CommandDefinition } from './cli/load-commands.js';
+import type { StoynxConfig } from './modules.js';
 
 try { process.loadEnvFile(); } catch { /* no .env file */ }
 
@@ -43,7 +45,7 @@ async function main(): Promise<void> {
     const cwd = process.cwd();
 
     if (moduleCommand.bootstrap) {
-      const { default: config } = await import(`${cwd}/config/environment.js`);
+      const config = await importConfig<StoynxConfig>(`${cwd}/config/environment`);
       const { default: Stonyx } = await import('./main.js');
       new Stonyx(config, cwd);
       await Stonyx.ready;

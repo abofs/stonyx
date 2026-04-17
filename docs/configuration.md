@@ -4,9 +4,9 @@ Stonyx uses a centralized configuration file that all modules read from at start
 
 ## Environment Config
 
-Your project's configuration lives at `config/environment.js`:
+Your project's configuration lives at `config/environment.ts` (preferred) or `config/environment.js`:
 
-```js
+```ts
 const { DEBUG, NODE_ENV } = process.env;
 
 const environment = NODE_ENV ?? 'development';
@@ -21,15 +21,17 @@ export default {
 };
 ```
 
-This file is auto-generated on `npm install` via the postinstall script if it doesn't already exist.
+Stonyx resolves the config by trying `.ts` first, then falling back to `.js`. If both are present `.ts` wins and a warning is logged — the `.js` is almost always a stale compiled artifact or postinstall stub and should be removed.
 
-> **Note:** `config/environment.js` is gitignored by default so each environment can have its own settings.
+The `.js` template is auto-generated on `npm install` via the postinstall script if neither extension exists yet.
+
+> **Note:** `config/environment.*` is gitignored by default so each environment can have its own settings.
 
 ## Module Configuration
 
 Each Stonyx module reads its configuration from a top-level key matching its camelCase name. For example, `@stonyx/rest-server` reads from `config.restServer`.
 
-Async modules ship with their own default config at `config/environment.js` inside the module package. Your project config is merged on top of these defaults — you only need to specify overrides.
+Async modules ship with their own default config at `config/environment.ts` (or `.js`) inside the module package. Your project config is merged on top of these defaults — you only need to specify overrides.
 
 ## Logging Configuration
 
@@ -49,10 +51,10 @@ This works for both module configs and custom service configs. See [Logging](log
 
 ## Test Environment Overrides
 
-When `NODE_ENV=test`, Stonyx automatically looks for `test/config/environment.js` in your project root:
+When `NODE_ENV=test`, Stonyx automatically looks for `test/config/environment.ts` (or `.js`) in your project root:
 
-```js
-// test/config/environment.js
+```ts
+// test/config/environment.ts
 export default {
   debug: false,
   restServer: { port: 0 },

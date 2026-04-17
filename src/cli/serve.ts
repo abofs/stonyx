@@ -1,5 +1,8 @@
+import { resolve } from 'path';
+import { pathToFileURL } from 'url';
 import { runStartupHooks, runShutdownHooks, type StoynxModule } from '../lifecycle.js';
 import { importConfig } from '../util/import-config.js';
+import { resolveEntryPoint } from '../util/resolve-entry-point.js';
 import type { StoynxConfig } from '../modules.js';
 
 export function createShutdownHandler(modules: StoynxModule[]): () => Promise<void> {
@@ -36,7 +39,8 @@ export function maybeRegisterAppShutdown(
 export default async function serve({ args }: { args: string[] }): Promise<void> {
   const cwd = process.cwd();
   const entryFlag = args.indexOf('--entry');
-  const entryPoint = (entryFlag !== -1 && entryFlag + 1 < args.length) ? args[entryFlag + 1] : 'app.js';
+  const entryArg = (entryFlag !== -1 && entryFlag + 1 < args.length) ? args[entryFlag + 1] : null;
+  const entryPoint = entryArg !== null ? resolve(cwd, entryArg) : resolveEntryPoint(`${cwd}/app`);
 
   const config = await importConfig<StoynxConfig>(`${cwd}/config/environment`);
   const { default: Stonyx } = await import('../main.js');
@@ -52,7 +56,7 @@ export default async function serve({ args }: { args: string[] }): Promise<void>
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 
-  const entryModule = await import(`${cwd}/${entryPoint}`);
+  const entryModule = await import(pathToFileURL(entryPoint).href);
 
   let appInstance: { shutdown?: () => Promise<void> } | undefined;
   if (entryModule.default) {

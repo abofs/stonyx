@@ -41,9 +41,9 @@ export default class MyModule {
 
 ## Default Configuration
 
-Async modules must include `config/environment.js` with sensible defaults:
+Async modules must include `config/environment.ts` (preferred) or `config/environment.js` with sensible defaults:
 
-```js
+```ts
 export default {
   logColor: 'cyan',
   logMethod: 'myModule',
@@ -51,6 +51,8 @@ export default {
   // Module-specific defaults...
 };
 ```
+
+Stonyx's loader tries `.ts` first, then falls back to `.js` for back-compat with modules that haven't migrated. If a module ships both, `.ts` wins and a warning is logged — the `.js` is almost certainly a stale compiled artifact and should be removed before publishing.
 
 User project config is merged on top of these defaults.
 

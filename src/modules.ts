@@ -5,6 +5,7 @@
 import { readFile } from '@stonyx/utils/file';
 import { kebabCaseToCamelCase } from '@stonyx/utils/string';
 import { mergeObject } from '@stonyx/utils/object';
+import { importConfig } from './util/import-config.js';
 import type { StoynxModule } from './lifecycle.js';
 import type Chronicle from '@stonyx/logs';
 
@@ -99,7 +100,7 @@ export default async function loadModules(
 
     try {
       // Load & Configure Async Modules
-      const { default: moduleConfig } = await import(`${rootPath}/node_modules/${moduleName}/config/environment.js`);
+      const moduleConfig = await importConfig<Record<string, unknown>>(`${rootPath}/node_modules/${moduleName}/config/environment`);
 
       const module = kebabCaseToCamelCase(moduleName.split('/').pop() ?? moduleName);
       const userConfig = (config[module] as Record<string, unknown>) || {};
@@ -114,7 +115,7 @@ export default async function loadModules(
       initializeModule(moduleName, moduleClass, modules, initPromises);
     } catch (error) {
       console.error(error);
-      throw new Error(`Stonyx modules with async loading must have a config/environment.js file with default configurations. Module "${moduleName}" failed to load.`);
+      throw new Error(`Stonyx modules with async loading must have a config/environment.{ts,js} file with default configurations. Module "${moduleName}" failed to load.`);
     }
   }
 

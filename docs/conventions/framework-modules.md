@@ -2,6 +2,16 @@
 
 When to use which `@stonyx/*` module. Always check these before reaching for Node built-ins or npm packages.
 
+## Module `config/environment.js` is always JavaScript
+
+Every `@stonyx/*` module that exposes default configuration does so through `config/environment.js`. This file is a **consumer contract**, not implementation code.
+
+- Consuming projects are pure JavaScript.
+- Node's type-strip loader refuses to process `.ts` files inside `node_modules`, so shipping a `.ts` config crashes every consumer at load time.
+- Stonyx's module loader (`src/util/import-config.ts`) therefore resolves `config/environment.js` only. If the `.js` file is missing, the loader throws `Config not found: …/config/environment.js` — there is no `.ts` fallback.
+
+TS-migration PRs in `@stonyx/*` modules **must** skip `config/environment.*` — leave it as `.js`. If you find a module shipping `config/environment.ts`, that is a P0 consumer crash; rename it back to `.js` immediately.
+
 ## `stonyx/log`
 
 All logging goes through `stonyx/log` (see universal rules in [conventions index](./index.md)).

@@ -23,7 +23,21 @@ export default {
 
 Stonyx resolves the config by trying `.ts` first, then falling back to `.js`. If both are present `.ts` wins and a warning is logged — the `.js` is almost always a stale compiled artifact or postinstall stub and should be removed.
 
-The `.js` template is auto-generated on `npm install` via the postinstall script if neither extension exists yet.
+### Postinstall template
+
+Stonyx ships two templates in its package — `config/environment copy.ts` and `config/environment copy.js` — and the postinstall script picks the one matching your project type:
+
+- **TypeScript consumers** (`tsconfig.json` present in the project root) receive `config/environment.ts`.
+- **JavaScript consumers** (no `tsconfig.json`) receive `config/environment.js`.
+
+The detection signal is a simple `tsconfig.json` existence check in the consumer root — unambiguous, available at postinstall time, and doesn't require parsing `package.json` or scanning `src/`.
+
+The postinstall is conservative and only seeds when nothing is already in place:
+
+- Skipped if `config/environment.ts` **or** `config/environment.js` already exists — your config is never overwritten.
+- Skipped if you ship `config/environment copy.ts` **or** `config/environment copy.js` as your own template — that's the opt-out signal, and either extension honors it.
+
+To manage your own bootstrap, commit `config/environment copy.ts` (or `.js`) in your repo and Stonyx will leave the postinstall template untouched.
 
 > **Note:** `config/environment.*` is gitignored by default so each environment can have its own settings.
 

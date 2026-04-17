@@ -18,6 +18,7 @@ import Chronicle from '@stonyx/logs';
 import loadModules from './modules.js';
 import { kebabCaseToCamelCase } from '@stonyx/utils/string';
 import { mergeObject } from '@stonyx/utils/object';
+import { importConfig } from './util/import-config.js';
 import type { StoynxModule } from './lifecycle.js';
 import type { StoynxConfig } from './modules.js';
 
@@ -59,10 +60,13 @@ export default class Stonyx {
     // Uses in-place mutation to preserve existing references (e.g. stonyx/config export cache)
     if (process.env.NODE_ENV === 'test') {
       try {
-        const { default: testOverrides } = await import(`${rootPath}/test/config/environment.js`);
+        const testOverrides = await importConfig<Record<string, unknown>>(`${rootPath}/test/config/environment`);
         const merged = mergeObject(config as Record<string, unknown>, testOverrides);
         Object.assign(config, merged);
-      } catch { /* no test overrides found */ }
+      } catch (err) {
+        // Missing test override is non-fatal; re-throw import errors that aren't "not found"
+        if (!(err instanceof Error) || !err.message.startsWith('Config not found:')) throw err;
+      }
     }
 
     this.modules = await loadModules(config, rootPath, this.chronicle);

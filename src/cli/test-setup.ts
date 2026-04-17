@@ -1,10 +1,11 @@
 import { createRequire } from 'module';
-import { pathToFileURL } from 'url';
+import { importConfig } from '../util/import-config.js';
+import type { StoynxConfig } from '../modules.js';
 
 const cwd = process.cwd();
 
 const { default: Stonyx } = await import('stonyx');
-const { default: config } = await import(pathToFileURL(`${cwd}/config/environment.js`).href);
+const config = await importConfig<StoynxConfig>(`${cwd}/config/environment`);
 
 new Stonyx(config, cwd);
 

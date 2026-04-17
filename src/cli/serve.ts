@@ -1,4 +1,6 @@
 import { runStartupHooks, runShutdownHooks, type StoynxModule } from '../lifecycle.js';
+import { importConfig } from '../util/import-config.js';
+import type { StoynxConfig } from '../modules.js';
 
 export function createShutdownHandler(modules: StoynxModule[]): () => Promise<void> {
   let shuttingDown = false;
@@ -36,7 +38,7 @@ export default async function serve({ args }: { args: string[] }): Promise<void>
   const entryFlag = args.indexOf('--entry');
   const entryPoint = (entryFlag !== -1 && entryFlag + 1 < args.length) ? args[entryFlag + 1] : 'app.js';
 
-  const { default: config } = await import(`${cwd}/config/environment.js`);
+  const config = await importConfig<StoynxConfig>(`${cwd}/config/environment`);
   const { default: Stonyx } = await import('../main.js');
 
   new Stonyx(config, cwd);

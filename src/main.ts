@@ -16,9 +16,9 @@
 
 import Chronicle from '@stonyx/logs';
 import loadModules from './modules.js';
-import { kebabCaseToCamelCase } from '@stonyx/utils/string';
 import { mergeObject } from '@stonyx/utils/object';
 import { importConfig } from './util/import-config.js';
+import { resolveModuleName } from './util/resolve-module-name.js';
 import type { StoynxModule } from './lifecycle.js';
 import type { StoynxConfig } from './modules.js';
 
@@ -43,11 +43,15 @@ export default class Stonyx {
     if (!config) throw new Error('Stonyx requires full environment configuration on startup');
     if (!rootPath) throw new Error('Stonyx requires root project\'s path on startup');
 
-    // Transform config from stonyx-modules running as a standalone
-    if (rootPath.includes('stonyx-')) {
-      const dirName = rootPath.split('/').pop() ?? '';
-      const moduleName = kebabCaseToCamelCase(dirName.replace('stonyx-', ''));
-      config = { [moduleName]: config, ...((config as Record<string, unknown>).modules as Record<string, unknown> || {}) };
+    // Transform config from stonyx-modules running as a standalone.
+    // Signal is the consumer's `package.json#name` (see resolveModuleName);
+    // this replaces the brittle `rootPath.includes('stonyx-')` heuristic so
+    // non-canonical rootPaths (worktrees, forks, renames) still work.
+    const moduleName = resolveModuleName(rootPath);
+    if (moduleName) {
+      const flatConfig = config as Record<string, unknown>;
+      const siblingModules = (flatConfig.modules as Record<string, unknown>) || {};
+      config = { [moduleName]: config, ...siblingModules };
       delete (config as Record<string, unknown>).modules;
     }
 

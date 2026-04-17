@@ -78,9 +78,11 @@ export default config;
 Bootstraps Stonyx (loads config, initializes modules, runs lifecycle hooks), then imports your application entry point.
 
 ```bash
-stonyx serve                    # Runs app.js by default
-stonyx serve --entry custom.js  # Runs a custom entry file
+stonyx serve                    # Runs app.ts (or app.js) by default
+stonyx serve --entry custom.ts  # Runs a custom entry file
 ```
+
+Both `.ts` and `.js` entry points are supported. When no `--entry` flag is passed, `stonyx serve` looks for `app.ts` first, then falls back to `app.js`. If both exist, `.ts` wins and a warning is logged (the `.js` is likely a stale compiled artifact). When an explicit `--entry <path>` is passed, the provided path is honored verbatim.
 
 The serve command also registers `SIGTERM` and `SIGINT` handlers that run [shutdown hooks](lifecycle.md) before exiting.
 

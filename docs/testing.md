@@ -5,9 +5,11 @@ Stonyx includes built-in test infrastructure using [QUnit](https://qunitjs.com/)
 ## Running Tests
 
 ```bash
-stonyx test                     # Runs test/**/*-test.js by default
+stonyx test                     # Runs test/**/*-test.{js,ts} by default
 stonyx test "test/unit/**/*.js" # Custom glob pattern
 ```
+
+The default glob matches both `.js` and `.ts` test files, so TypeScript test suites run without any CLI argument.
 
 The test command:
 1. Sets `NODE_ENV=test`

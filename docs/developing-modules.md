@@ -75,12 +75,29 @@ Pass the module name without the `@stonyx/` prefix.
 
 ## Standalone Development
 
-When running a module standalone (project path contains `stonyx-`), Stonyx auto-transforms the config structure. Your module's config is wrapped under its camelCase name:
+When a stonyx module runs its own tests (or is otherwise started as a standalone app), Stonyx auto-wraps the flat test config under the module's camelCase key so module code can read `config.myModule.*` exactly as it would in a consumer app.
+
+**Detection signal:** Stonyx reads the consumer's `package.json#name`:
+
+- `@stonyx/rest-server` (scoped) → wraps under `restServer`
+- `stonyx-rest-server` (unscoped fallback) → wraps under `restServer`
+- Anything else (including missing / malformed `package.json`) → no transform, config is used as-is
 
 ```js
 // If your module is @stonyx/rest-server and config is { port: 3000 }
 // Stonyx transforms it to: { restServer: { port: 3000 } }
 ```
+
+Sibling `config.modules` entries are flattened into the result alongside the wrapped module:
+
+```js
+// Input config:
+//   { port: 3000, modules: { other: { enabled: true } } }
+// Transformed to:
+//   { restServer: { port: 3000, modules: { ... } }, other: { enabled: true } }
+```
+
+**Migration note:** prior versions used a `rootPath.includes('stonyx-')` heuristic, which misfired in worktrees and forks with non-canonical paths. If you maintain a fork, make sure your `package.json#name` still starts with `@stonyx/` or `stonyx-`, or explicitly pass the wrapped config shape from your app's entry point.
 
 ## Custom CLI Commands
 

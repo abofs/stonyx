@@ -42,7 +42,7 @@ The serve command also registers `SIGTERM` and `SIGINT` handlers that run [shutd
 Runs your test suite using [QUnit](https://qunitjs.com/) with automatic Stonyx bootstrapping. Sets `NODE_ENV=test` and applies any [test config overrides](configuration.md#test-environment-overrides).
 
 ```bash
-stonyx test                     # Runs test/**/*-test.js by default
+stonyx test                     # Runs test/**/*-test.{js,ts} by default
 stonyx test "test/unit/**/*.js" # Custom test glob
 ```
 

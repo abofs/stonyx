@@ -115,7 +115,7 @@ export default async function loadModules(
       initializeModule(moduleName, moduleClass, modules, initPromises);
     } catch (error) {
       console.error(error);
-      throw new Error(`Stonyx modules with async loading must have a config/environment.{ts,js} file with default configurations. Module "${moduleName}" failed to load.`);
+      throw new Error(`Stonyx modules with async loading must have a config/environment.js file with default configurations. Module "${moduleName}" failed to load.`);
     }
   }
 

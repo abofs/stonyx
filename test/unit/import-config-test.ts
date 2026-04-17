@@ -8,40 +8,16 @@ const { module, test } = QUnit;
 
 let dir: string;
 let basePath: string;
-let originalWarn: typeof console.warn;
-let warnCalls: unknown[][];
-
-function setupWarnSpy(): void {
-  originalWarn = console.warn;
-  warnCalls = [];
-  console.warn = (...args: unknown[]) => { warnCalls.push(args); };
-}
-
-function restoreWarn(): void {
-  console.warn = originalWarn;
-}
 
 module('[Unit] importConfig', function(hooks) {
   hooks.beforeEach(function() {
     // Unique subdir per test so module import cache can't collide across tests
     dir = mkdtempSync(join(tmpdir(), 'stonyx-import-config-'));
     basePath = join(dir, 'environment');
-    setupWarnSpy();
   });
 
   hooks.afterEach(function() {
-    restoreWarn();
     rmSync(dir, { recursive: true, force: true });
-  });
-
-  test('returns default export when only .ts exists', async function(assert) {
-    writeFileSync(`${basePath}.ts`, `export default { source: 'ts', port: 3000 };\n`);
-
-    const config = await importConfig<{ source: string; port: number }>(basePath);
-
-    assert.equal(config.source, 'ts');
-    assert.equal(config.port, 3000);
-    assert.equal(warnCalls.length, 0, 'no warning logged');
   });
 
   test('returns default export when only .js exists', async function(assert) {
@@ -51,35 +27,35 @@ module('[Unit] importConfig', function(hooks) {
 
     assert.equal(config.source, 'js');
     assert.equal(config.port, 4000);
-    assert.equal(warnCalls.length, 0, 'no warning logged');
   });
 
-  test('prefers .ts when both exist and logs a warning', async function(assert) {
+  test('throws "Config not found: *.js" when only .ts exists', async function(assert) {
     writeFileSync(`${basePath}.ts`, `export default { source: 'ts' };\n`);
-    writeFileSync(`${basePath}.js`, `export default { source: 'js' };\n`);
 
-    const config = await importConfig<{ source: string }>(basePath);
-
-    assert.equal(config.source, 'ts', '.ts wins');
-    assert.equal(warnCalls.length, 1, 'exactly one warning logged');
-    const [[msg]] = warnCalls as [[string]];
-    assert.ok(msg.includes('.ts'), 'warning mentions .ts');
-    assert.ok(msg.includes('.js'), 'warning mentions .js');
-  });
-
-  test('throws clear error when neither exists', async function(assert) {
     try {
       await importConfig(basePath);
       assert.ok(false, 'should have thrown');
     } catch (err) {
       const message = (err as Error).message;
-      assert.ok(message.includes('Config not found'), 'error mentions "Config not found"');
-      assert.ok(message.includes('ts') && message.includes('js'), 'error references both extensions');
+      assert.ok(message.startsWith('Config not found'), 'error starts with "Config not found"');
+      assert.ok(message.endsWith('.js'), 'error references .js (not .ts)');
+      assert.notOk(message.includes('.ts'), '.ts is not a supported extension');
+    }
+  });
+
+  test('throws "Config not found: *.js" when neither exists', async function(assert) {
+    try {
+      await importConfig(basePath);
+      assert.ok(false, 'should have thrown');
+    } catch (err) {
+      const message = (err as Error).message;
+      assert.ok(message.startsWith('Config not found'), 'error starts with "Config not found"');
+      assert.ok(message.endsWith('.js'), 'error references .js');
     }
   });
 
   test('propagates non-"not found" import errors (syntax error)', async function(assert) {
-    writeFileSync(`${basePath}.ts`, `export default { this is invalid syntax !!! };\n`);
+    writeFileSync(`${basePath}.js`, `export default { this is invalid syntax !!! };\n`);
 
     try {
       await importConfig(basePath);

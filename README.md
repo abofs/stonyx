@@ -6,7 +6,6 @@
 
 **Stonyx** is a lightweight, modular framework for building modern Node.js applications. It provides a plug-and-play architecture, centralized color-coded logging, and seamless async module integration.
 
-- 100% JavaScript (ES Modules)
 - Drop-in module system — no boilerplate
 - Automatic async module loading and initialization
 - Built-in CLI for scaffolding, bootstrapping, and testing

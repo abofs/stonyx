@@ -120,8 +120,9 @@ module('[Unit] importConfig — app-owned resolver ({ts,js}, .ts preferred)', fu
   });
 
   // AC3 — restores the test 4c80c87 deleted (`prefers .ts when both exist and
-  // logs a warning`), re-scoped to app-owned. The message must match
-  // `src/util/resolve-entry-point.ts:13-17` in shape.
+  // logs a warning`), re-scoped to app-owned. The message is built by
+  // `dualExtensionWarning` in `src/util/extension-resolution.ts`, shared with
+  // `resolveEntryPoint`; it is pinned here as a literal so a reword goes red.
   test('AC3 prefers .ts when both exist and logs the dual-extension warning', async function(assert) {
     const warnStub: SinonStub = sinon.stub(console, 'warn');
     writeFileSync(`${basePath}.ts`, `export default { source: 'ts' };\n`);
@@ -139,7 +140,7 @@ module('[Unit] importConfig — app-owned resolver ({ts,js}, .ts preferred)', fu
       warnStub.firstCall.args[0],
       `Warning: both ${basePath}.ts and ${basePath}.js exist. Using .ts — delete the .js to silence this warning ` +
       '(it is likely a stale compiled artifact or postinstall stub).',
-      'warning matches resolve-entry-point.ts:13-17 in message shape'
+      'warning matches dualExtensionWarning() in src/util/extension-resolution.ts, byte for byte'
     );
   });
 

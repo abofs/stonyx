@@ -1,13 +1,14 @@
 import { existsSync } from 'fs';
 import { pathToFileURL } from 'url';
-
-const EXTENSIONS = ['ts', 'js'] as const;
+import { EXTENSIONS, dualExtensionWarning } from './extension-resolution.js';
 
 /**
  * Resolve an APP-OWNED config — `<cwd>/config/environment`,
  * `<rootPath>/test/config/environment` — as `{ts,js}`, preferring `.ts`.
  * Mirrors `src/util/resolve-entry-point.ts`, which has resolved app-owned
- * entry points this way since abofs/stonyx#67.
+ * entry points this way since abofs/stonyx#67 — the candidate list and the
+ * dual-extension warning are shared through `./extension-resolution.ts` so
+ * the two cannot drift.
  *
  * These paths live in the consuming project's own tree, never inside
  * `node_modules`, so they load under the app's own loader and Node's type
@@ -30,9 +31,7 @@ export async function importConfig<T = unknown>(basePath: string): Promise<T> {
   }
 
   if (matches.length > 1) {
-    console.warn(
-      `Warning: both ${basePath}.ts and ${basePath}.js exist. Using .ts — delete the .js to silence this warning (it is likely a stale compiled artifact or postinstall stub).`
-    );
+    console.warn(dualExtensionWarning(basePath));
   }
 
   const path = `${basePath}.${matches[0]}`;

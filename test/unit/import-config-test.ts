@@ -1,15 +1,56 @@
 import QUnit from 'qunit';
 import sinon, { type SinonStub } from 'sinon';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { importConfig } from '../../src/util/import-config.js';
 import { importModuleConfig } from '../../src/util/import-module-config.js';
 
 const { module, test } = QUnit;
 
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
 let dir: string;
 let basePath: string;
+
+/**
+ * Resolve `basePath` through the BUILT `dist/util/import-config.js` under a
+ * plain `node` child.
+ *
+ * This exists because an in-process assertion CANNOT measure `.ts`-over-`.js`
+ * preference. This file runs under `node --import tsx`, and tsx rewrites a
+ * `${basePath}.js` specifier to the `.ts` sibling whenever one exists — so the
+ * value `importConfig` hands back on a both-siblings pair reads `'ts'` no
+ * matter which extension `EXTENSIONS` actually picked. Measured, not reasoned:
+ * with `EXTENSIONS` reversed to `['js','ts']` the in-process form of this file
+ * stays 9/0 green.
+ *
+ * The built `dist/util/import-config.js` is a `.js` importer under plain
+ * `node`, so no rewrite happens and the answer is the resolver's own.
+ * `pnpm test` runs `pnpm build` first, so `dist/` is always current.
+ */
+function resolveViaBuiltDist(configBase: string): { stdout: string; stderr: string; status: number | null } {
+  const importConfigUrl = pathToFileURL(join(repoRoot, 'dist', 'util', 'import-config.js')).href;
+  const script = [
+    `const { importConfig } = await import(${JSON.stringify(importConfigUrl)});`,
+    `const value = await importConfig(${JSON.stringify(configBase)});`,
+    `process.stdout.write('SOURCE:' + value.source);`
+  ].join('\n');
+
+  const env = { ...process.env };
+  delete env.NODE_ENV;
+  delete env.NODE_OPTIONS; // pin the isolation explicitly: no tsx in the child, ever
+
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+    env,
+    timeout: 120000
+  });
+
+  return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', status: result.status };
+}
 
 // abofs/stonyx#90 — config resolution is split on OWNERSHIP, not on extension.
 //
@@ -24,7 +65,7 @@ let basePath: string;
 // base commit (e57b99b) and must keep passing. They are not evidence the story
 // works — they are evidence it did not break what 4c80c87 fixed.
 
-module('[Unit] importConfig — module-owned resolver (.js only)', function(hooks) {
+module('[Unit] importModuleConfig — module-owned resolver (.js only)', function(hooks) {
   hooks.beforeEach(function() {
     // Unique subdir per test so module import cache can't collide across tests
     dir = mkdtempSync(join(tmpdir(), 'stonyx-import-config-'));
@@ -125,12 +166,17 @@ module('[Unit] importConfig — app-owned resolver ({ts,js}, .ts preferred)', fu
   // `resolveEntryPoint`; it is pinned here as a literal so a reword goes red.
   test('AC3 prefers .ts when both exist and logs the dual-extension warning', async function(assert) {
     const warnStub: SinonStub = sinon.stub(console, 'warn');
-    writeFileSync(`${basePath}.ts`, `export default { source: 'ts' };\n`);
+    writeFileSync(`${basePath}.ts`, `const source: string = 'ts';\nexport default { source };\n`);
     writeFileSync(`${basePath}.js`, `export default { source: 'js' };\n`);
 
     const config = await importConfig<{ source: string }>(basePath);
 
-    assert.equal(config.source, 'ts', '.ts wins over .js');
+    // NOT the preference assertion — this one cannot fail. Under `node --import
+    // tsx` the `.ts` sibling is substituted for a `.js` specifier, so this reads
+    // 'ts' whichever extension the resolver picked. Preference is asserted in
+    // the next test, under plain `node`, where it can fail. Do not delete that
+    // test on the grounds that this one "already covers .ts wins".
+    assert.equal(config.source, 'ts', 'a config was loaded and its default export returned (see the next test for preference)');
     assert.equal(warnStub.callCount, 1, 'warned exactly once');
 
     // Byte-for-byte the shape resolve-entry-point.ts emits, with "Entry point"
@@ -141,6 +187,33 @@ module('[Unit] importConfig — app-owned resolver ({ts,js}, .ts preferred)', fu
       `Warning: both ${basePath}.ts and ${basePath}.js exist. Using .ts — delete the .js to silence this warning ` +
       '(it is likely a stale compiled artifact or postinstall stub).',
       'warning matches dualExtensionWarning() in src/util/extension-resolution.ts, byte for byte'
+    );
+  });
+
+  // AC3, the half that can actually fail. Identical sibling pair, resolved by
+  // the BUILT `dist/util/import-config.js` under plain `node` — no tsx, so no
+  // `.js` -> `.ts` specifier rewrite, so the answer is EXTENSIONS' own.
+  //
+  // Mutation-checked: reversing `EXTENSIONS` to `['js','ts']` in
+  // `src/util/extension-resolution.ts` turns THIS test red. The in-process AC3
+  // above stays green under the same mutation, which is why both exist.
+  //
+  // The same property is independently pinned by AC5's precondition in
+  // `test/unit/config-resolution-wiring-test.ts` ('APP_OWNED:ts'); neither is
+  // redundant — that one guards the wiring, this one is where a reader looking
+  // for ".ts wins over .js" arrives.
+  test('AC3 [PREFERENCE] .ts wins over .js — asserted under plain node against the built dist/', function(assert) {
+    writeFileSync(`${basePath}.ts`, `const source: string = 'ts';\nexport default { source };\n`);
+    writeFileSync(`${basePath}.js`, `export default { source: 'js' };\n`);
+
+    const result = resolveViaBuiltDist(basePath);
+
+    assert.equal(result.status, 0, `the probe child exited 0\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`);
+    assert.equal(
+      result.stdout,
+      'SOURCE:ts',
+      'the app-owned resolver picked the .ts over an identical .js sibling ' +
+      `(a 'SOURCE:js' here means EXTENSIONS no longer prefers .ts)\n--- stderr ---\n${result.stderr}`
     );
   });
 

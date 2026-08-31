@@ -46,6 +46,26 @@ const { module, test } = QUnit;
 
 const ACCEPTANCE = process.env.STONYX_ACCEPTANCE === '1';
 
+/**
+ * Mutation proof. NOT A FIX — nothing here touches this repo's source, and no
+ * normal run applies it. It hand-patches the THROWAWAY generated project
+ * inside the harness's own scratch directory so each assertion can be observed
+ * going green, which is what makes a red run evidence rather than an artefact
+ * of an assertion that could never pass.
+ *
+ * #90-#93 must make this harness green with CONTROL unset. If a story reaches
+ * for this flag, it has misread its own acceptance criteria.
+ *
+ *   fixed    — apply the hand-fix; every assertion is expected to pass.
+ *   swallow  — apply the hand-fix AND drop the three files a consumer added
+ *              during remediation (eslint.config.js, prettier.config.js,
+ *              test/types/qunit-events.d.ts) into the generation directory
+ *              with no `.gitignore` negation. Only the clone-parity assertion
+ *              is expected to fail, demonstrating that it detects the whole
+ *              `*.js` / `*.d.ts` swallow class rather than one instance.
+ */
+const CONTROL = process.env.STONYX_ACCEPTANCE_CONTROL ?? '';
+
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** The override base path, relative to the project root. */
@@ -222,7 +242,15 @@ function probeResolvableExtensions(scratch: string, extractedPackage: string): s
 
 function serveSmoke(cloneDir: string): Promise<CommandResult> {
   return new Promise(resolve => {
-    const child = spawn('pnpm', ['exec', 'stonyx', 'serve'], { cwd: cloneDir, env: process.env });
+    // The CLI binary directly, not `pnpm exec stonyx serve`. A pnpm wrapper
+    // absorbs SIGTERM itself and reports status null / signal SIGTERM, so the
+    // clean-shutdown assertion would be measuring pnpm rather than the app.
+    // REST_PORT is randomised so a local run cannot collide with a service
+    // already holding @stonyx/rest-server's default port.
+    const child = spawn(path.join(cloneDir, 'node_modules', '.bin', 'stonyx'), ['serve'], {
+      cwd: cloneDir,
+      env: { ...process.env, REST_PORT: String(20000 + Math.floor(Math.random() * 20000)) }
+    });
 
     let stdout = '';
     let stderr = '';
@@ -456,6 +484,8 @@ async function runLifecycle(): Promise<void> {
   // 2. Generate a project, selecting @stonyx/orm.
   await scaffoldProject(state.genDir, GENERATED_APP_NAME, [ORM_MODULE]);
 
+  if (CONTROL) await applyControlPatch(state.genDir);
+
   // 3. Commit it, exactly as a consumer would before pushing.
   const gitEnv = { GIT_AUTHOR_NAME: 'harness', GIT_AUTHOR_EMAIL: 'harness@example.com', GIT_COMMITTER_NAME: 'harness', GIT_COMMITTER_EMAIL: 'harness@example.com' };
   run('git', ['init', '-q', '.'], state.genDir);
@@ -492,6 +522,12 @@ async function runLifecycle(): Promise<void> {
   // 7. Build and serve BEFORE any sentinel injection, so an injected sentinel
   //    can never be the reason `tsc` fails.
   state.build = run('pnpm', ['build'], state.cloneDir);
+
+  // `outDir: '.'` leaves app.js beside app.ts, which makes resolveEntryPoint
+  // warn on every serve. Deciding where build output goes is #91's call; the
+  // control just removes it so the warning assertion can be seen going green.
+  if (CONTROL) rmSync(path.join(state.cloneDir, 'app.js'), { force: true });
+
   state.serve = await serveSmoke(state.cloneDir);
 
   // 8. Sentinel: distinct values in the primary config and in every override
@@ -556,4 +592,46 @@ async function bootWithSentinels(cloneDir: string): Promise<HarnessState['boot']
   const parsed = JSON.parse(boot.stdout.slice(marker + '__HARNESS__'.length));
 
   return { sentinel: parsed.sentinel, bootError: parsed.bootError, raw: boot.stdout };
+}
+
+
+/**
+ * The hand-built fixed state. Deliberately minimal and deliberately dumb: it
+ * is evidence, not a design. See the CONTROL comment above.
+ */
+async function applyControlPatch(genDir: string): Promise<void> {
+  // The override at the extension the resolver demands, tracked past `*.js`.
+  await fs.rename(path.join(genDir, `${OVERRIDE_BASE}.ts`), path.join(genDir, `${OVERRIDE_BASE}.js`));
+  await fs.appendFile(
+    path.join(genDir, '.gitignore'),
+    '\n# Hand-authored test override — NOT build output. tsconfig excludes test/,\n' +
+    '# so nothing ever emits this file. Without the negation above it vanishes on\n' +
+    '# clone and the suite silently reverts to production configuration.\n' +
+    `!${OVERRIDE_BASE}.js\n`
+  );
+
+  // TS2564 — the early `return App.instance` path leaves `ready` unassigned.
+  const appPath = path.join(genDir, 'app.ts');
+  await fs.writeFile(appPath, (await fs.readFile(appPath, 'utf8')).replace('ready: Promise<void>;', 'ready!: Promise<void>;'));
+
+  // TS2724 — @stonyx/orm exports no `HasMany` type.
+  const schemaPath = path.join(genDir, 'config', 'db-schema.ts');
+  await fs.writeFile(schemaPath, (await fs.readFile(schemaPath, 'utf8')).replace(", type HasMany", ''));
+
+  // TS2580 — the example config reads process.env with no @types/node, and
+  // @stonyx/orm imports @stonyx/rest-server unconditionally.
+  const manifestPath = path.join(genDir, 'package.json');
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+  manifest.devDependencies['@types/node'] = '^25.5.2';
+  manifest.devDependencies['@stonyx/rest-server'] = 'latest';
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  if (CONTROL !== 'swallow') return;
+
+  // The three instances a consumer's remediation added, which `*.js` and
+  // `*.d.ts` swallow with no negation. Present here, absent from the clone.
+  writeFileSync(path.join(genDir, 'eslint.config.js'), 'export default [];\n');
+  writeFileSync(path.join(genDir, 'prettier.config.js'), 'export default {};\n');
+  mkdirSync(path.join(genDir, 'test', 'types'), { recursive: true });
+  writeFileSync(path.join(genDir, 'test', 'types', 'qunit-events.d.ts'), 'export {};\n');
 }

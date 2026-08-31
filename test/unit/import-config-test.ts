@@ -1,10 +1,12 @@
 import QUnit from 'qunit';
+import sinon, { type SinonStub } from 'sinon';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { importConfig } from '../../src/util/import-config.js';
+import { importModuleConfig } from '../../src/util/import-module-config.js';
 
-const { module, test, skip } = QUnit;
+const { module, test } = QUnit;
 
 let dir: string;
 let basePath: string;
@@ -19,7 +21,8 @@ let basePath: string;
 //     `src/util/resolve-entry-point.ts`.
 //
 // AC1 and the module-owned half of AC4 are REGRESSION GUARDS: they pass at the
-// base commit and must keep passing. They are not evidence the story works.
+// base commit (e57b99b) and must keep passing. They are not evidence the story
+// works — they are evidence it did not break what 4c80c87 fixed.
 
 module('[Unit] importConfig — module-owned resolver (.js only)', function(hooks) {
   hooks.beforeEach(function() {
@@ -35,21 +38,22 @@ module('[Unit] importConfig — module-owned resolver (.js only)', function(hook
   test('returns default export when only .js exists', async function(assert) {
     writeFileSync(`${basePath}.js`, `export default { source: 'js', port: 4000 };\n`);
 
-    const config = await importConfig<{ source: string; port: number }>(basePath);
+    const config = await importModuleConfig<{ source: string; port: number }>(basePath);
 
     assert.equal(config.source, 'js');
     assert.equal(config.port, 4000);
   });
 
-  test('throws "Config not found: *.js" when only .ts exists', async function(assert) {
+  // AC1 — REGRESSION GUARD. Green at base, green at head.
+  test('AC1 [REGRESSION GUARD] throws "Config not found: *.js" when only .ts exists', async function(assert) {
     writeFileSync(`${basePath}.ts`, `export default { source: 'ts' };\n`);
 
     try {
-      await importConfig(basePath);
+      await importModuleConfig(basePath);
       assert.ok(false, 'should have thrown');
     } catch (err) {
       const message = (err as Error).message;
-      assert.ok(message.startsWith('Config not found'), 'error starts with "Config not found"');
+      assert.equal(message, `Config not found: ${basePath}.js`, '4c80c87 message is unchanged, byte for byte');
       assert.ok(message.endsWith('.js'), 'error references .js (not .ts)');
       assert.notOk(message.includes('.ts'), '.ts is not a supported extension');
     }
@@ -57,7 +61,7 @@ module('[Unit] importConfig — module-owned resolver (.js only)', function(hook
 
   test('throws "Config not found: *.js" when neither exists', async function(assert) {
     try {
-      await importConfig(basePath);
+      await importModuleConfig(basePath);
       assert.ok(false, 'should have thrown');
     } catch (err) {
       const message = (err as Error).message;
@@ -66,8 +70,82 @@ module('[Unit] importConfig — module-owned resolver (.js only)', function(hook
     }
   });
 
-  test('propagates non-"not found" import errors (syntax error)', async function(assert) {
+  // AC4, module-owned half — REGRESSION GUARD. Green at base, green at head.
+  test('AC4 [REGRESSION GUARD] propagates non-"not found" import errors (syntax error)', async function(assert) {
     writeFileSync(`${basePath}.js`, `export default { this is invalid syntax !!! };\n`);
+
+    try {
+      await importModuleConfig(basePath);
+      assert.ok(false, 'should have thrown');
+    } catch (err) {
+      const message = (err as Error).message;
+      assert.notOk(message.startsWith('Config not found'), 'not the "not found" error');
+      assert.ok(message.length > 0, 'has an error message');
+    }
+  });
+});
+
+module('[Unit] importConfig — app-owned resolver ({ts,js}, .ts preferred)', function(hooks) {
+  hooks.beforeEach(function() {
+    dir = mkdtempSync(join(tmpdir(), 'stonyx-import-config-app-'));
+    basePath = join(dir, 'environment');
+  });
+
+  hooks.afterEach(function() {
+    sinon.restore();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('returns default export when only .js exists', async function(assert) {
+    writeFileSync(`${basePath}.js`, `export default { source: 'js', port: 4000 };\n`);
+
+    const config = await importConfig<{ source: string; port: number }>(basePath);
+
+    assert.equal(config.source, 'js');
+    assert.equal(config.port, 4000);
+  });
+
+  // AC2 — restores the test 4c80c87 deleted (`returns default export when only
+  // .ts exists`), re-scoped to app-owned. Not a revert: the module-owned half
+  // above keeps 4c80c87's behaviour byte for byte.
+  test('AC2 returns default export when only .ts exists', async function(assert) {
+    const warnStub: SinonStub = sinon.stub(console, 'warn');
+    writeFileSync(`${basePath}.ts`, `export default { source: 'ts', port: 5000 };\n`);
+
+    const config = await importConfig<{ source: string; port: number }>(basePath);
+
+    assert.equal(config.source, 'ts', 'resolved the .ts and returned its default export');
+    assert.equal(config.port, 5000);
+    assert.equal(warnStub.callCount, 0, 'no dual-extension warning when only one extension exists');
+  });
+
+  // AC3 — restores the test 4c80c87 deleted (`prefers .ts when both exist and
+  // logs a warning`), re-scoped to app-owned. The message must match
+  // `src/util/resolve-entry-point.ts:13-17` in shape.
+  test('AC3 prefers .ts when both exist and logs the dual-extension warning', async function(assert) {
+    const warnStub: SinonStub = sinon.stub(console, 'warn');
+    writeFileSync(`${basePath}.ts`, `export default { source: 'ts' };\n`);
+    writeFileSync(`${basePath}.js`, `export default { source: 'js' };\n`);
+
+    const config = await importConfig<{ source: string }>(basePath);
+
+    assert.equal(config.source, 'ts', '.ts wins over .js');
+    assert.equal(warnStub.callCount, 1, 'warned exactly once');
+
+    // Byte-for-byte the shape resolve-entry-point.ts emits, with "Entry point"
+    // swapped for the config base path. Asserted as a whole string so a
+    // reworded message cannot pass on a substring.
+    assert.equal(
+      warnStub.firstCall.args[0],
+      `Warning: both ${basePath}.ts and ${basePath}.js exist. Using .ts — delete the .js to silence this warning ` +
+      '(it is likely a stale compiled artifact or postinstall stub).',
+      'warning matches resolve-entry-point.ts:13-17 in message shape'
+    );
+  });
+
+  // AC4, app-owned half — DEFECT TEST (red at base: the .ts never resolves there).
+  test('AC4 propagates non-"not found" import errors (syntax error in a .ts)', async function(assert) {
+    writeFileSync(`${basePath}.ts`, `export default { this is invalid syntax !!! };\n`);
 
     try {
       await importConfig(basePath);
@@ -79,42 +157,16 @@ module('[Unit] importConfig — module-owned resolver (.js only)', function(hook
     }
   });
 
-  // TODO(#90 AC1) — REGRESSION GUARD, restate against the module-owned export
-  //   once the split lands: only `<base>.ts` present must still throw exactly
-  //   `Config not found: <base>.js`.
-  skip('AC1 [REGRESSION GUARD] module-owned: only .ts present still throws "Config not found: <base>.js"', function(assert) {
-    assert.ok(false, 'TODO');
-  });
-
-  // TODO(#90 AC4, module-owned half) — REGRESSION GUARD. Already green today;
-  //   re-name so the module-owned / app-owned split is legible in TAP output.
-  skip('AC4 [REGRESSION GUARD] module-owned: a syntax error inside the resolved config propagates unchanged', function(assert) {
-    assert.ok(false, 'TODO');
-  });
-});
-
-module('[Unit] importConfig — app-owned resolver ({ts,js}, .ts preferred)', function() {
-  // TODO(#90 AC2) — restores the test 4c80c87 deleted
-  //   (`returns default export when only .ts exists`), re-scoped to app-owned.
-  skip('AC2 app-owned: only .ts present resolves and returns its default export', function(assert) {
-    assert.ok(false, 'TODO');
-  });
-
-  // TODO(#90 AC3) — restores the test 4c80c87 deleted
-  //   (`prefers .ts when both exist and logs a warning`), re-scoped to app-owned.
-  //   Warning shape must match `resolve-entry-point.ts:13-17`.
-  skip('AC3 app-owned: both .ts and .js present resolves the .ts and emits the dual-extension warning', function(assert) {
-    assert.ok(false, 'TODO');
-  });
-
-  // TODO(#90 AC4, app-owned half) — DEFECT TEST.
-  skip('AC4 app-owned: a syntax error inside the resolved config propagates unchanged', function(assert) {
-    assert.ok(false, 'TODO');
-  });
-
-  // TODO(#90) — app-owned "nothing resolves" must keep the `Config not found:`
-  //   prefix that `src/main.ts:70-73` matches on.
-  skip('app-owned: neither extension present throws a "Config not found:" error naming {ts,js}', function(assert) {
-    assert.ok(false, 'TODO');
+  test('throws a "Config not found:" error naming {ts,js} when neither exists', async function(assert) {
+    try {
+      await importConfig(basePath);
+      assert.ok(false, 'should have thrown');
+    } catch (err) {
+      const message = (err as Error).message;
+      // src/main.ts:70-73 matches on this exact prefix to tell an absent
+      // optional test override from a real import failure.
+      assert.ok(message.startsWith('Config not found:'), 'keeps the prefix main.ts matches on');
+      assert.equal(message, `Config not found: ${basePath}.{ts,js}`, 'names both supported extensions');
+    }
   });
 });

@@ -8,9 +8,27 @@ Every `@stonyx/*` module that exposes default configuration does so through `con
 
 - Consuming projects are pure JavaScript.
 - Node's type-strip loader refuses to process `.ts` files inside `node_modules`, so shipping a `.ts` config crashes every consumer at load time.
-- Stonyx's module loader (`src/util/import-config.ts`) therefore resolves `config/environment.js` only. If the `.js` file is missing, the loader throws `Config not found: …/config/environment.js` — there is no `.ts` fallback.
+- Stonyx's module loader (`src/util/import-module-config.ts`) therefore resolves `config/environment.js` only. If the `.js` file is missing, the loader throws `Config not found: …/config/environment.js` — there is no `.ts` fallback.
 
 TS-migration PRs in `@stonyx/*` modules **must** skip `config/environment.*` — leave it as `.js`. If you find a module shipping `config/environment.ts`, that is a P0 consumer crash; rename it back to `.js` immediately.
+
+### What this rule does NOT cover
+
+The boundary is **ownership**, not extension. The rule above is about files a `@stonyx/*` module *publishes* and a consumer loads out of `node_modules`. It says nothing about the consumer's own config, and applying it there is what broke `stonyx test` and every `bootstrap: true` module command on a TypeScript app (abofs/stonyx#90).
+
+| Path | Owner | Resolves | Resolver |
+|---|---|---|---|
+| `node_modules/<mod>/config/environment` | the module | `.js` **only**, forever | `importModuleConfig` (`src/util/import-module-config.ts`) |
+| `<cwd>/config/environment` | the app | `{ts,js}`, `.ts` preferred | `importConfig` (`src/util/import-config.ts`) |
+| `<root>/test/config/environment` | the app | `{ts,js}`, `.ts` preferred | `importConfig` |
+
+App-owned configs live in the consuming project's own tree, never inside `node_modules`, so they load under the app's own loader and Node's type stripping applies to them — exactly as it already does for app entry points (`src/util/resolve-entry-point.ts`, since abofs/stonyx#67). When both siblings exist at an app-owned path the `.ts` wins and the loader warns; the `.js` is almost always a stale build artifact.
+
+Three consequences worth stating plainly:
+
+- **Do not route `src/modules.ts` at `importConfig`.** It is the only module-owned call site. Pointing it at the app-owned resolver re-ships abofs/stonyx-orm#118 — the `orm@0.3.1` P0 that crashed every consumer at parse time. `test/unit/config-resolution-wiring-test.ts` (AC5) exists solely to go red on that.
+- **App-owned `.ts` configs require Node type stripping** (default from 22.18 / 23.6; `.nvmrc` here is `v24.13.0`). This is not a new dependency — entry-point resolution already relies on it — but it is a floor, and the fresh-clone acceptance harness asserts it by execution rather than assuming it.
+- **App-owned `.ts` configs must use erasable syntax only, and a violation is now a hard boot failure.** `src/main.ts` swallows exactly one error out of the `test/config/environment` load — the one whose message starts with `Config not found:` — so an absent override stays non-fatal. Before abofs/stonyx#90 a `test/config/environment.ts` *always* produced that message (the resolver asked for `.js`), so the file was silently skipped. It is now imported, and non-erasable TypeScript in it (`enum`, `namespace`, parameter properties, decorators) throws `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`, which does not match the prefix and propagates out of `Stonyx.ready`. That is the intended trade — a silently dropped override is worse than a loud failure — but it is a real behaviour change on upgrade for any project already carrying such a file. The three tests in `test/unit/config-resolution-wiring-test.ts` § *main.ts test-override swallow boundary* pin all three sides of it.
 
 ## `stonyx/log`
 

@@ -18,24 +18,12 @@
   "module": "[Acceptance] Fresh-clone scaffold (abofs/stonyx#89)",
   "expectedFailures": [
     {
-      "issue": 90,
-      "name": "#90/#91 — the test-config override the framework demands is tracked by git"
-    },
-    {
-      "issue": 90,
-      "name": "#90/#91 — the test-config override the framework demands is not gitignored"
-    },
-    {
       "issue": 91,
       "name": "#91 — the clone builds: pnpm build exits 0"
     },
     {
       "issue": 91,
       "name": "#91 — the clone serves: stonyx serve reaches init and exits 0 on SIGTERM"
-    },
-    {
-      "issue": 90,
-      "name": "#90 — a sentinel present only in the test override wins over the primary config after a real boot"
     },
     {
       "issue": 92,

@@ -630,14 +630,23 @@ module('[Acceptance] Fresh-clone scaffold (abofs/stonyx#89)', function (hooks) {
   test('precondition: the harness instrumentation measured something — resolver probe, install and port', function (assert) {
     if (!setupComplete(assert)) return;
 
-    // Without this, a renamed or moved resolver yields [] and the demanded
-    // override path silently degrades to the literal 'js' — the hard-coded
-    // filename the whole derivation exists to avoid.
-    assert.ok(
-      state.resolvableExtensions.length > 0,
-      `the packed build's importConfig resolved at least one extension; got ${JSON.stringify(state.resolvableExtensions)}. ` +
+    // abofs/stonyx#90 AC6. This was a non-empty check: without it a renamed or
+    // moved resolver yields [] and the demanded override path silently degrades
+    // to the literal 'js', the hard-coded filename the whole derivation exists
+    // to avoid. It is now the exact array, because that makes it a direct
+    // executable test of the story's central platform premise — that Node
+    // type-strips an app-root `.ts` imported by a `.js` module living inside
+    // `node_modules`. The probe runs the PACKED `dist/util/import-config.js`
+    // under plain `node` (never tsx), so if the premise is false this returns
+    // ["js"] and #90 is disproved in one assertion. Order is preference order:
+    // `.ts` first.
+    assert.deepEqual(
+      state.resolvableExtensions,
+      ['ts', 'js'],
+      `the packed build's importConfig resolves ["ts","js"], .ts first; got ${JSON.stringify(state.resolvableExtensions)}. ` +
       'An empty result means the probe could not call the resolver at all, and the demanded override path ' +
-      'below is a hard-coded fallback rather than a measurement.'
+      'below is a hard-coded fallback rather than a measurement. ' +
+      '["js"] alone means app-owned configs still resolve .js only (abofs/stonyx#90 not landed, or reverted).'
     );
 
     assert.strictEqual(state.install.status, 0, `pnpm install in the clone exited 0; got ${state.install.status}`);

@@ -1,21 +1,57 @@
 # Fresh-clone scaffold acceptance harness — abofs/stonyx#89.
 #
-# EXPECTED TO BE RED until #90-#93 land. The harness was built first, against
-# unfixed `dev`, precisely so its red output is the artifact; a harness written
-# after the fixes cannot be shown to have been capable of failing.
+# The harness is EXPECTED TO BE RED until #90-#92 land. It was built first,
+# against unfixed `dev`, precisely so its red output is the artifact; a harness
+# written after the fixes cannot be shown to have been capable of failing.
 #
-# Separate from ci.yml because it performs a real `pnpm install` of a generated
-# project and is far slower than the unit suite.
+# This job does NOT run the harness bare. It runs it through the expected-
+# failures ratchet (`scripts/acceptance-ratchet.js` +
+# `test/acceptance/expected-failures.json`), which is green today and turns red
+# in BOTH directions — on a new failure, and on a baselined assertion that
+# starts passing without the baseline shrinking. A permanently-red check trains
+# people to ignore it and cannot signal a new failure; a ratchet forces each of
+# #90-#92 to shrink the baseline in its own PR. See docs/testing.md.
+#
+# Separate from ci.yml because the shared reusable workflow
+# (abofs/stonyx-workflows/.github/workflows/ci.yml) hard-codes `run: pnpm test`
+# and exposes no input for a different command — it is unreachable for this job,
+# not merely unsuitable. The extra git identity step below is a second reason.
+# The right end state is an input on the shared workflow; until then this is a
+# deliberate, recorded exception, not licence to fork CI.
+#
+# NOTE: the harness is not read-only. It deletes and rebuilds the checkout's own
+# `dist/`, performs a real network `pnpm install`, and binds a TCP port.
+#
+# `pull_request` (NOT `pull_request_target`) with `contents: read` and no
+# secrets is deliberate: a fork PR may edit `test/acceptance/**` and run its own
+# code here, and it gets a read-only token and nothing to steal. Do not
+# "harden" this by switching to `pull_request_target` — that would be the
+# actual vulnerability.
 name: Scaffold Acceptance
 
 on:
   pull_request:
     branches: [dev, main]
     paths:
-      - 'src/cli/new.ts'
-      - 'src/util/import-config.ts'
-      - 'src/main.ts'
-      - 'scripts/postinstall.js'
+      # `src/**`, not a hand-picked list. The harness runs the whole scaffold
+      # lifecycle, and the previous filter omitted `src/util/resolve-entry-point.ts`
+      # — the only source of the dual-extension warning one assertion matches on —
+      # as well as `src/cli/serve.ts` and `src/util/resolve-module-name.ts`.
+      - 'src/**'
+      - 'scripts/**'
+      - 'config/environment copy.*'
+      - 'package.json'
+      - 'test/acceptance/**'
+      - '.github/workflows/scaffold-acceptance.yml'
+  # Without this the job never runs on `dev` after merge, so it cannot be the
+  # visible tracker it is described as.
+  push:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'config/environment copy.*'
+      - 'package.json'
       - 'test/acceptance/**'
       - '.github/workflows/scaffold-acceptance.yml'
 
@@ -34,6 +70,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # The job pushes nothing, and the step below installs unpinned
+          # `latest` packages with lifecycle scripts enabled in this same
+          # workspace. Leaving the token in .git/config costs nothing to avoid.
+          persist-credentials: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -57,5 +98,5 @@ jobs:
           git config --global user.name 'stonyx-acceptance'
           git config --global user.email 'stonyx-acceptance@users.noreply.github.com'
 
-      - name: Fresh-clone scaffold harness
-        run: pnpm test:acceptance
+      - name: Fresh-clone scaffold harness (expected-failures ratchet)
+        run: pnpm test:acceptance:ratchet

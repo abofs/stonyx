@@ -4,14 +4,14 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-interface ModuleOption {
+export interface ModuleOption {
   question: string;
   package: string;
   dirs?: string[];
   files?: Record<string, () => string>;
 }
 
-const MODULE_OPTIONS: ModuleOption[] = [
+export const MODULE_OPTIONS: ModuleOption[] = [
   {
     question: 'Will this project need a REST server?',
     package: '@stonyx/rest-server',

@@ -54,6 +54,14 @@ const OVERRIDE_BASE = 'test/config/environment';
 /** Extensions any config resolver in this ecosystem could plausibly accept. */
 const CANDIDATE_EXTENSIONS = ['ts', 'js'] as const;
 
+/**
+ * Deliberately does NOT start with `stonyx-`. `resolveModuleName` treats any
+ * project whose package.json name begins with `stonyx-` or `@stonyx/` as a
+ * standalone stonyx module and wraps its entire config under a module key —
+ * which would make the sentinel unreadable for a reason unrelated to #88.
+ */
+const GENERATED_APP_NAME = 'acceptance-harness-app';
+
 const PRIMARY_SENTINEL = 'PRIMARY-CONFIG-WINS';
 const OVERRIDE_SENTINEL = 'TEST-OVERRIDE-WINS';
 const SENTINEL_KEY = 'harnessSentinel';
@@ -100,6 +108,7 @@ interface HarnessState {
   serve: CommandResult;
   boot: { sentinel: string | null; bootError: string | null; raw: string };
   installedRealPath: string;
+  cloneRealPath: string;
 }
 
 const state: HarnessState = {
@@ -123,7 +132,8 @@ const state: HarnessState = {
   build: { status: null, stdout: '', stderr: '' },
   serve: { status: null, stdout: '', stderr: '' },
   boot: { sentinel: null, bootError: null, raw: '' },
-  installedRealPath: ''
+  installedRealPath: '',
+  cloneRealPath: ''
 };
 
 function run(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): CommandResult {
@@ -305,7 +315,7 @@ module('[Acceptance] Fresh-clone scaffold (abofs/stonyx#89)', function (hooks) {
 
   test('precondition (trap B): the clone consumes the packed tarball, not a workspace link', function (assert) {
     assert.ok(
-      state.installedRealPath.startsWith(path.join(state.cloneDir, 'node_modules')),
+      state.installedRealPath.startsWith(path.join(state.cloneRealPath, 'node_modules')),
       `installed stonyx resolves inside the clone's own node_modules, not the working tree: ${state.installedRealPath}`
     );
     assert.notOk(
@@ -444,7 +454,7 @@ async function runLifecycle(): Promise<void> {
   state.resolvableExtensions = probeResolvableExtensions(state.scratch, state.extractedPackage);
 
   // 2. Generate a project, selecting @stonyx/orm.
-  await scaffoldProject(state.genDir, 'stonyx-89-harness-app', [ORM_MODULE]);
+  await scaffoldProject(state.genDir, GENERATED_APP_NAME, [ORM_MODULE]);
 
   // 3. Commit it, exactly as a consumer would before pushing.
   const gitEnv = { GIT_AUTHOR_NAME: 'harness', GIT_AUTHOR_EMAIL: 'harness@example.com', GIT_COMMITTER_NAME: 'harness', GIT_COMMITTER_EMAIL: 'harness@example.com' };
@@ -477,6 +487,7 @@ async function runLifecycle(): Promise<void> {
   await pinTarball(state.cloneDir, state.tarball);
   state.install = run('pnpm', ['install'], state.cloneDir);
   state.installedRealPath = await fs.realpath(path.join(state.cloneDir, 'node_modules', 'stonyx')).catch(() => '');
+  state.cloneRealPath = await fs.realpath(state.cloneDir);
 
   // 7. Build and serve BEFORE any sentinel injection, so an injected sentinel
   //    can never be the reason `tsc` fails.

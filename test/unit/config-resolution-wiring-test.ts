@@ -85,9 +85,13 @@ function createInstalledApp(name: string, devDependencies: Record<string, string
   return installed;
 }
 
-function runInstalled(args: string[]): RunResult {
+function runInstalled(args: string[], extraEnv: Record<string, string> = {}): RunResult {
   const env = { ...process.env };
   delete env.NODE_ENV;
+  // Pin the no-tsx isolation explicitly rather than relying on `--import tsx`
+  // living in argv: an exported NODE_OPTIONS would otherwise reach the child.
+  delete env.NODE_OPTIONS;
+  Object.assign(env, extraEnv);
 
   const result = spawnSync(process.execPath, args, { cwd: root, encoding: 'utf8', env, timeout: 120000 });
 
@@ -236,5 +240,120 @@ module('[Unit] #90 wiring — app-owned CLI call sites reach the {ts,js} resolve
     const result = runInstalled(['--import', pathToFileURL(setupFile).href, '-e', '']);
 
     assertReachedAppOwnedResolver(assert, 'stonyx test-setup', result);
+  });
+});
+
+// abofs/stonyx#90 — the `src/main.ts:70-73` SWALLOW BOUNDARY.
+//
+// `main.ts` catches errors out of `importConfig(<root>/test/config/environment)`
+// and re-throws anything whose message does not start with `Config not found:`.
+// This PR changes what reaches that catch, and the change is invisible in a
+// test of `importConfig` alone:
+//
+//   BEFORE — the resolver asked for `.js` only, so a `test/config/environment.ts`
+//     raised `Config not found: …environment.js`, matched the prefix, and the
+//     override was SILENTLY SKIPPED. Boot succeeded, unmerged.
+//   AFTER  — the `.ts` is imported. It is now merged (the point of the story),
+//     and if it contains NON-ERASABLE TypeScript (`enum`, `namespace`,
+//     parameter properties, decorators) Node throws
+//     ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX, which does NOT match the prefix and
+//     propagates out of `Stonyx.ready` as a hard boot failure.
+//
+// That is a real behaviour change for any consumer already carrying such a
+// file (measured on this PR's build: HEAD BOOT_FAILED, BASE BOOT_OK), and it
+// is documented in `docs/conventions/framework-modules.md`. AC4 covers
+// propagation out of `importConfig`; these three tests cover the line that
+// actually changed meaning — the swallow itself.
+//
+// All three run under plain `node` against the built `dist/` for the same
+// reason the tests above do: under tsx the `.js` specifier is rewritten and
+// the boundary cannot be observed.
+
+const BOOT_PROBE = (installed: string, rootPath: string): string => [
+  `const { importConfig } = await import(${JSON.stringify(path.join(installed, 'dist', 'util', 'import-config.js'))});`,
+  `const primary = await importConfig(${JSON.stringify(path.join(rootPath, 'config', 'environment'))});`,
+  `const { default: Stonyx } = await import('stonyx');`,
+  `new Stonyx(primary, ${JSON.stringify(rootPath)});`,
+  `try {`,
+  `  await Stonyx.ready;`,
+  `  process.stdout.write('BOOT_OK:' + JSON.stringify(Stonyx.instance.config.port) + '\\n');`,
+  `} catch (err) {`,
+  `  process.stdout.write('BOOT_FAILED:' + (err && err.code ? err.code : 'NO_CODE') + '|' + (err && err.message ? err.message : String(err)) + '\\n');`,
+  `}`
+].join('\n');
+
+module('[Unit] #90 wiring — main.ts test-override swallow boundary', function(hooks) {
+  hooks.beforeEach(function() {
+    root = mkdtempSync(path.join(tmpdir(), 'stonyx-wiring-main-'));
+  });
+
+  hooks.afterEach(function() {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function writeTestOverride(body: string): void {
+    mkdirSync(path.join(root, 'test', 'config'), { recursive: true });
+    writeFileSync(path.join(root, 'test', 'config', 'environment.ts'), body);
+  }
+
+  function boot(installed: string): RunResult {
+    return runInstalled(['--input-type=module', '-e', BOOT_PROBE(installed, root)], { NODE_ENV: 'test' });
+  }
+
+  // The swallow still swallows. `main.ts:72` must keep matching the app-owned
+  // resolver's new `Config not found: <base>.{ts,js}` message, or every app
+  // without a test override would fail to boot under NODE_ENV=test.
+  test('an absent test/config/environment is still non-fatal under NODE_ENV=test', function(assert) {
+    const installed = createInstalledApp('wiring-main-absent-app');
+
+    const result = boot(installed);
+
+    assert.ok(
+      result.stdout.includes('BOOT_OK:4321'),
+      `boot succeeded on the primary config alone; main.ts:72 still matches the {ts,js} "Config not found:" message${report(result)}`
+    );
+  });
+
+  // The check could have failed the other way: an erasable `.ts` override is
+  // genuinely imported and merged now. Without this, the failure below would
+  // not distinguish "non-erasable syntax throws" from "a .ts override is
+  // simply broken".
+  test('an erasable test/config/environment.ts is imported and merged', function(assert) {
+    const installed = createInstalledApp('wiring-main-erasable-app');
+    writeTestOverride(`const port: number = 9876;\nexport default { port };\n`);
+
+    const result = boot(installed);
+
+    assert.ok(
+      result.stdout.includes('BOOT_OK:9876'),
+      `the .ts test override overrode the primary config's port (4321 -> 9876)${report(result)}`
+    );
+  });
+
+  // The behaviour change. Before this PR this file produced
+  // `Config not found: …environment.js`, was swallowed, and boot succeeded
+  // with the override silently dropped.
+  test('a NON-ERASABLE test/config/environment.ts fails the boot instead of being swallowed', function(assert) {
+    const installed = createInstalledApp('wiring-main-nonerasable-app');
+    writeTestOverride(`enum Mode { Test = 'test' }\nexport default { port: 9876, mode: Mode.Test };\n`);
+
+    const result = boot(installed);
+
+    assert.ok(
+      result.stdout.includes('BOOT_FAILED:'),
+      `Stonyx.ready rejected rather than swallowing the error${report(result)}`
+    );
+    assert.notOk(
+      result.stdout.includes('BOOT_OK'),
+      `the override was NOT silently skipped — that is the pre-#90 behaviour${report(result)}`
+    );
+    assert.ok(
+      /ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX|not supported in strip-only mode|TypeScript/.test(result.stdout),
+      `the propagated error is the type-stripping failure, not a "Config not found:"${report(result)}`
+    );
+    assert.notOk(
+      result.stdout.includes('BOOT_FAILED:NO_CODE|Config not found'),
+      `main.ts:72's prefix match did not absorb it${report(result)}`
+    );
   });
 });

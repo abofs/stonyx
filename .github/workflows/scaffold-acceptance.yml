@@ -1,0 +1,61 @@
+# Fresh-clone scaffold acceptance harness — abofs/stonyx#89.
+#
+# EXPECTED TO BE RED until #90-#93 land. The harness was built first, against
+# unfixed `dev`, precisely so its red output is the artifact; a harness written
+# after the fixes cannot be shown to have been capable of failing.
+#
+# Separate from ci.yml because it performs a real `pnpm install` of a generated
+# project and is far slower than the unit suite.
+name: Scaffold Acceptance
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'src/cli/new.ts'
+      - 'src/util/import-config.ts'
+      - 'src/main.ts'
+      - 'scripts/postinstall.js'
+      - 'test/acceptance/**'
+      - '.github/workflows/scaffold-acceptance.yml'
+
+concurrency:
+  group: scaffold-acceptance-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '9'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.0'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The generated project is committed with git, so the runner needs an
+      # identity. The harness passes its own author/committer env, but `git
+      # commit` still reads user.* for the reflog in some git builds.
+      - name: Configure git identity
+        run: |
+          git config --global user.name 'stonyx-acceptance'
+          git config --global user.email 'stonyx-acceptance@users.noreply.github.com'
+
+      - name: Fresh-clone scaffold harness
+        run: pnpm test:acceptance

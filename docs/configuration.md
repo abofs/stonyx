@@ -45,9 +45,7 @@ To manage your own bootstrap, commit `config/environment copy.ts` (or `.js`) in 
 
 Each Stonyx module reads its configuration from a top-level key matching its camelCase name. For example, `@stonyx/rest-server` reads from `config.restServer`.
 
-Async modules ship with their own default config at `config/environment.js` inside the module package — always `.js`, never `.ts`, because Node refuses to type-strip files inside `node_modules`. Your project config is merged on top of these defaults — you only need to specify overrides.
-
-The `.ts`-first resolution described above is for **your** config, not a module's. The boundary is ownership, not extension: see [Framework Modules § What this rule does NOT cover](conventions/framework-modules.md#what-this-rule-does-not-cover).
+Async modules ship with their own default config at `config/environment.ts` (or `.js`) inside the module package. Your project config is merged on top of these defaults — you only need to specify overrides.
 
 ## Logging Configuration
 

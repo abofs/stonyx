@@ -41,9 +41,9 @@ export default class MyModule {
 
 ## Default Configuration
 
-Async modules must include `config/environment.js` with sensible defaults. **This file is always JavaScript, never TypeScript** — see [Framework Modules](conventions/framework-modules.md#module-configenvironmentjs-is-always-javascript):
+Async modules must include `config/environment.ts` (preferred) or `config/environment.js` with sensible defaults:
 
-```js
+```ts
 export default {
   logColor: 'cyan',
   logMethod: 'myModule',
@@ -52,11 +52,7 @@ export default {
 };
 ```
 
-Stonyx's module loader (`src/util/import-module-config.ts`) resolves `config/environment.js` **only**. There is no `.ts` attempt, no fallback and no warning: if the `.js` is missing the loader throws `Config not found: …/config/environment.js`.
-
-The reason is a hard platform constraint, not a style preference. Node's type-strip loader refuses to process `.ts` files inside `node_modules`, so a module that publishes `config/environment.ts` crashes every consumer at parse time (abofs/stonyx-orm#118). If your module is written in TypeScript, keep `config/environment.js` as hand-written JavaScript, or compile it to `.js` before publishing.
-
-This rule is about the files your module *publishes*. The consuming app's own `config/environment` and `test/config/environment` resolve `{ts,js}` with `.ts` preferred — the boundary is ownership, not extension (abofs/stonyx#90). See [Framework Modules § What this rule does NOT cover](conventions/framework-modules.md#what-this-rule-does-not-cover).
+Stonyx's loader tries `.ts` first, then falls back to `.js` for back-compat with modules that haven't migrated. If a module ships both, `.ts` wins and a warning is logged — the `.js` is almost certainly a stale compiled artifact and should be removed before publishing.
 
 User project config is merged on top of these defaults.
 

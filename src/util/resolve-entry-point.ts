@@ -1,6 +1,7 @@
 import { existsSync } from 'fs';
 import { resolve } from 'path';
-import { EXTENSIONS, dualExtensionWarning } from './extension-resolution.js';
+
+const EXTENSIONS = ['ts', 'js'] as const;
 
 export function resolveEntryPoint(basePath: string): string {
   const matches = EXTENSIONS.filter(ext => existsSync(resolve(`${basePath}.${ext}`)));
@@ -10,7 +11,9 @@ export function resolveEntryPoint(basePath: string): string {
   }
 
   if (matches.length > 1) {
-    console.warn(dualExtensionWarning(basePath));
+    console.warn(
+      `Warning: both ${basePath}.ts and ${basePath}.js exist. Using .ts — delete the .js to silence this warning (it is likely a stale compiled artifact or postinstall stub).`
+    );
   }
 
   const ext = matches[0];

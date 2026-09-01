@@ -5,7 +5,7 @@
 import { readFile } from '@stonyx/utils/file';
 import { kebabCaseToCamelCase } from '@stonyx/utils/string';
 import { mergeObject } from '@stonyx/utils/object';
-import { importModuleConfig } from './util/import-module-config.js';
+import { importConfig } from './util/import-config.js';
 import type { StoynxModule } from './lifecycle.js';
 import type Chronicle from '@stonyx/logs';
 
@@ -100,10 +100,7 @@ export default async function loadModules(
 
     try {
       // Load & Configure Async Modules
-      // MODULE-OWNED: `.js` only, always. Routing this to the app-owned
-      // `importConfig` re-ships abofs/stonyx-orm#118 — Node refuses to
-      // type-strip inside `node_modules`. See abofs/stonyx#90.
-      const moduleConfig = await importModuleConfig<Record<string, unknown>>(`${rootPath}/node_modules/${moduleName}/config/environment`);
+      const moduleConfig = await importConfig<Record<string, unknown>>(`${rootPath}/node_modules/${moduleName}/config/environment`);
 
       const module = kebabCaseToCamelCase(moduleName.split('/').pop() ?? moduleName);
       const userConfig = (config[module] as Record<string, unknown>) || {};
@@ -118,11 +115,7 @@ export default async function loadModules(
       initializeModule(moduleName, moduleClass, modules, initPromises);
     } catch (error) {
       console.error(error);
-      throw new Error(
-        'Stonyx modules with async loading must ship a config/environment.js with default configurations. ' +
-        'Module configs resolve as .js only — never .ts, because Node refuses to type-strip inside node_modules. ' +
-        `Module "${moduleName}" failed to load.`
-      );
+      throw new Error(`Stonyx modules with async loading must have a config/environment.js file with default configurations. Module "${moduleName}" failed to load.`);
     }
   }
 

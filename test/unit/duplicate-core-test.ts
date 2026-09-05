@@ -64,10 +64,22 @@ async function coreSeenByWithNodePath(moduleDir: string, nodePath: string): Prom
 
 const roots: string[] = [];
 
+/**
+ * REALPATH'D, and that is load-bearing for D8.
+ *
+ * `mkdtemp(tmpdir())` returns `/var/folders/.../T/...` on macOS while the
+ * directory's real path is `/private/var/folders/.../T/...`. `coreSeenBy`
+ * realpaths the module dir, so any assertion that compares a fixture path
+ * against a resolved one is really comparing `/var` with `/private/var` and
+ * passes or fails on the `/private` prefix rather than on the property under
+ * test. That is exactly how D8 stayed green on macOS while reding on Linux CI,
+ * against correct AND incorrect code. Realpath'ing here makes every fixture in
+ * this file the same shape CI runs on.
+ */
 function root(pkg: Record<string, unknown>): string {
   const dir = createRoot(pkg, 'stonyx-dupcore-fixture-');
   roots.push(dir);
-  return dir;
+  return realpathSync(dir);
 }
 
 /**
@@ -205,44 +217,86 @@ module('[Unit] duplicate-core detector', function(hooks) {
     );
   });
 
-  // D8 — CONTROL for the ancestor filter in `coreSeenBy`. `require.resolve.paths`
-  // appends the CJS global folders (NODE_PATH, ~/.node_modules, the node
-  // prefix) after the node_modules walk. ESM ignores all of them, so honouring
-  // them would invent a "duplicate core" out of an environment variable that
-  // the real import never consults — turning a boot that works into a refusal.
+  // D8 — CONTROL for the walk filter in `coreSeenBy` (`isWalkEntry`).
+  // `require.resolve.paths` appends the CJS global folders (NODE_PATH,
+  // ~/.node_modules, the node prefix) after the node_modules walk. ESM ignores
+  // all of them, so honouring them would invent a "duplicate core" out of an
+  // environment variable that the real import never consults — turning a boot
+  // that works into a refusal.
   //
   // Must run in a subprocess: NODE_PATH is read once at bootstrap into
   // `Module.globalPaths`, so setting `process.env.NODE_PATH` from a test is a
-  // check that cannot fail. The premise assertion below is what proves the
-  // contaminated environment was actually delivered to the child.
-  test('D8: a stonyx reachable only via NODE_PATH is ignored, not reported as a duplicate', async function(assert) {
+  // check that cannot fail.
+  //
+  // WHAT THIS ASSERTS, AND WHY IT CHANGED. The previous version handed the
+  // child a `/var/folders/...` NODE_PATH while the module dir realpath'd to
+  // `/private/var/folders/...`, so the old prefix test missed on `/private`
+  // rather than on non-ancestry: it was green on macOS against BOTH the correct
+  // and the broken filter, and red on Linux against both. It measured the host,
+  // not the invariant. Every path here is realpath-clean (see `root`), and the
+  // two contaminated cases are the two shapes that matter:
+  //
+  //   SHALLOW — the store sits beside the app under a shared parent. This is
+  //     the ordinary temp-dir and sibling-checkout shape, and the one CI hit.
+  //   DEEP    — the store sits INSIDE the app (`<app>/tools`), so its parent is
+  //     a genuine ancestor of the module dir. A filter that only rejected
+  //     shallow entries would still admit this one.
+  //
+  // Neither directory is named `node_modules`, so neither is anything node's
+  // walk would ever emit, and both must be ignored.
+  test('D8: a stonyx reachable only via NODE_PATH is ignored, shallow or deep', async function(assert) {
     const rootPath = root({ name: 'd8-app' });
     installModule(rootPath, '@stonyx/d8-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
     symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
 
+    // The ambient store. `<contaminated>/stonyx` is what NODE_PATH points at;
+    // `<contaminated>/node_modules/stonyx` is the SAME manifest reachable by a
+    // genuine walk, and exists only so this fixture's liveness is provable.
     const contaminated = root({ name: 'd8-nodepath-store' });
-    const ambientCore = join(contaminated, 'stonyx');
+    const ambientManifest = JSON.stringify({ name: 'stonyx', version: '0.0.0-ambient', type: 'module', main: 'dist/main.js' });
 
-    mkdirSync(ambientCore, { recursive: true });
-    writeFileSync(
-      join(ambientCore, 'package.json'),
-      JSON.stringify({ name: 'stonyx', version: '0.0.0-ambient', type: 'module', main: 'dist/main.js' })
-    );
+    for (const dir of [ join(contaminated, 'stonyx'), join(contaminated, 'node_modules', 'stonyx') ]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'package.json'), ambientManifest);
+    }
 
-    // Premise: a module with NO reachable core is where NODE_PATH would win,
-    // and it is the only place the filter is observable at all.
+    installModule(contaminated, '@stonyx/d8-liveness', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+
+    // A module with NO reachable core is where a global folder would win, and
+    // it is the only place the filter is observable at all.
     const isolated = root({ name: 'd8-isolated-app' });
     installModule(isolated, '@stonyx/d8-isolated', { main: 'main.js', keywords: [ 'stonyx-module' ]});
 
+    const isolatedModuleDir = join(isolated, 'node_modules', '@stonyx/d8-isolated');
+    const deepStore = join(isolated, 'tools');
+
+    mkdirSync(join(deepStore, 'stonyx'), { recursive: true });
+    writeFileSync(join(deepStore, 'stonyx', 'package.json'), ambientManifest);
+
+    assert.strictEqual(realpathSync(isolated), isolated, 'premise: the fixture root is realpath-clean, so nothing here can pass on a /private prefix');
+
+    // LIVENESS of the ambient fixture itself: reached by a real walk it IS
+    // reported. So a null below is the filter rejecting the candidate, not an
+    // unreadable or absent manifest.
+    assert.strictEqual(
+      (await coreSeenByWithNodePath(join(contaminated, 'node_modules', '@stonyx/d8-liveness'), contaminated))?.version,
+      '0.0.0-ambient',
+      'liveness: the ambient core IS resolvable when it sits on the module\'s own walk'
+    );
     assert.strictEqual(
       (await coreSeenByWithNodePath(join(rootPath, 'node_modules', '@stonyx/d8-mod'), contaminated))?.version,
       runningCore()?.version,
       'premise: with a real core in the tree, that is what is reported'
     );
     assert.strictEqual(
-      await coreSeenByWithNodePath(join(isolated, 'node_modules', '@stonyx/d8-isolated'), contaminated),
+      await coreSeenByWithNodePath(isolatedModuleDir, contaminated),
       null,
-      'and a core reachable only through NODE_PATH is not reported at all'
+      'SHALLOW: a NODE_PATH store beside the app, under a shared parent, is not reported'
+    );
+    assert.strictEqual(
+      await coreSeenByWithNodePath(isolatedModuleDir, deepStore),
+      null,
+      'DEEP: a NODE_PATH store INSIDE the app, whose parent is a genuine ancestor, is not reported either'
     );
   });
 

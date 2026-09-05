@@ -291,6 +291,15 @@ export function findForeignCores(
  * Printable ASCII only, and bounded, so a long value cannot push the rest of
  * the message off screen either.
  */
+/**
+ * Roots are clamped at `PATH_MAX` rather than at the version's 64. A root is
+ * the one thing in this message a consumer acts on directly, and a truncated
+ * path is worse than a long one — the version is a label, the path is an
+ * instruction. Nothing longer than this can exist on the filesystems Node runs
+ * on, so in practice a root is sanitised and never shortened.
+ */
+const PATH_LIMIT = 1024;
+
 function display(value: string, limit = 64): string {
   const clamped = value.replace(/[^\x20-\x7e]/g, '?');
 
@@ -324,9 +333,9 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
   const copies = new Set([ first.runningCore.root, ...foreign.map(({ moduleCore }) => moduleCore.root) ]).size;
 
   const rows: [ string, string, string ][] = [
-    [ 'running core', display(first.runningCore.version), display(first.runningCore.root, 200) ],
+    [ 'running core', display(first.runningCore.version), display(first.runningCore.root, PATH_LIMIT) ],
     ...foreign.map(({ moduleName, moduleCore }) =>
-      [ `seen by "${moduleName}"`, display(moduleCore.version), display(moduleCore.root, 200) ] as [ string, string, string ]),
+      [ `seen by "${moduleName}"`, display(moduleCore.version), display(moduleCore.root, PATH_LIMIT) ] as [ string, string, string ]),
   ];
   const labelWidth = Math.max(...rows.map(([ label ]) => label.length));
   const versionWidth = Math.max(...rows.map(([ , version ]) => version.length));

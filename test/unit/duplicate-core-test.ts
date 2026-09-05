@@ -299,6 +299,24 @@ module('[Unit] duplicate-core detector', function(hooks) {
       null,
       'DEEP: a NODE_PATH store INSIDE the app, whose parent is a genuine ancestor, is not reported either'
     );
+
+    // NESTED — the one shape the name test alone would let through, and the
+    // reason `isWalkEntry` also rejects a candidate whose PARENT is named
+    // `node_modules`. Node's walk never emits `<x>/node_modules/node_modules`;
+    // it stops descending at the first `node_modules`. Without that clause this
+    // entry is named `node_modules` AND parented by a genuine ancestor of the
+    // module dir, so it would be admitted — the clause was argued in a docblock
+    // and this is what makes the argument able to fail.
+    const nestedStore = join(isolated, 'node_modules', 'node_modules');
+
+    mkdirSync(join(nestedStore, 'stonyx'), { recursive: true });
+    writeFileSync(join(nestedStore, 'stonyx', 'package.json'), ambientManifest);
+
+    assert.strictEqual(
+      await coreSeenByWithNodePath(isolatedModuleDir, nestedStore),
+      null,
+      'NESTED: an entry named node_modules INSIDE node_modules is not one node would ever walk, and is not reported'
+    );
   });
 
   // D10 — the fail-opens are SILENT, which is the half of the disclosure that

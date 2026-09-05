@@ -122,12 +122,16 @@ async function boot(rootPath: string, config: Record<string, unknown>): Promise<
  *
  * `pnpm test` is `pnpm build && qunit`, so CI always ran a fresh `dist/` and
  * this hole was invisible there. It is not invisible in watch mode or an IDE
- * runner, both of which invoke the qunit binary directly. Measured at this
- * head, before the guard: apply M2 (`LOADABLE_EXTENSIONS` -> `[ 'js', 'ts' ]`)
- * to `src/util/import-config.ts`, skip the build, run
+ * runner, both of which invoke the qunit binary directly. Re-measured at this
+ * head: apply M2 (`LOADABLE_EXTENSIONS` -> `[ 'js', 'ts' ]`) to
+ * `src/util/import-config.ts`, skip the build, run
  *   node --import tsx node_modules/qunit/bin/qunit.js 'test/**\/*-test.ts'
- * -> rc=0, 115 pass / 0 fail. The mutation `b9d087a` exists to catch survived
- * because every plain-node assertion was reading last build's artifact.
+ * -> with the guard stubbed out, rc=0, 131 pass / 0 fail; with it live, rc=1,
+ * 116 pass / 15 fail (14 helpers refusing to drive a stale `dist/`, plus the
+ * guard's own test). The mutation `b9d087a` exists to catch survived without
+ * it, because every plain-node assertion was reading last build's artifact.
+ * The first reading of this control was `rc=0, 115 pass / 0 fail` at
+ * `183b34a` -- right then, dated now.
  *
  * The remedy for a defect about untrustworthy evidence contained a smaller
  * copy of that same defect. Its own control is in the commit message.
@@ -240,8 +244,11 @@ module('[Unit] refusalIsAboutTheConfig', function() {
   // F-7. The `false`-expecting case for the shape `loadModules` actually
   // emits. Without this, the only `file://` test asserted `true` — and `true`
   // is also what the "nothing extracted" fallback used to return, so deleting
-  // the `(?:file:\/\/)?` alternation left the suite at 124 pass / 0 fail
-  // while reintroducing the F-3 false positive in production.
+  // the `(?:file:\/\/)?` alternation left the suite green -- 124 pass / 0 fail
+  // at `7c91aac`, the commit that measurement was taken at -- while
+  // reintroducing the F-3 false positive in production. Re-measured at this
+  // head the same deletion reds at 129 pass / 2 fail, killed by the unit test
+  // AND by the end-to-end loadModules test.
   test('false when a file:// refusal names a DIFFERENT file', function(assert) {
     assert.false(refusalIsAboutTheConfig(
       `Stripping types is currently unsupported for files under node_modules, for "file:///tmp/app/node_modules/dep/thing.ts"`,
@@ -649,8 +656,10 @@ module('[Unit] importConfig', function(hooks) {
   // The PR body called this one untestable "because this environment does not
   // have a Node without type stripping". That was wrong, and the cost of it
   // being wrong was a set member no test could reach: deleting
-  // `'ERR_UNKNOWN_FILE_EXTENSION'` from the set left the suite at 116 pass /
-  // 0 fail. An unreachable branch in the guard that exists to make failures
+  // `'ERR_UNKNOWN_FILE_EXTENSION'` from the set left the suite green -- 116
+  // pass / 0 fail when that was measured, at `e2c62da`. Re-measured at this
+  // head with this test present, the same deletion reds at 130 pass / 1 fail,
+  // and this is the only test it reds. An unreachable branch in the guard that exists to make failures
   // loud is the same defect the guard is for.
   //
   // The runtime is reachable with a flag on this exact Node (v24.13.0):

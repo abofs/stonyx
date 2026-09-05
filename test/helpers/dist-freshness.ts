@@ -7,12 +7,22 @@
  * plain node can only run the compiled artifact. Nothing checked that the
  * artifact matched the source.
  *
- * Measured before this guard existed: apply the M2 mutation
- * (`LOADABLE_EXTENSIONS` -> `[ 'js', 'ts' ]`) to `src/util/import-config.ts`,
- * skip the build, run `node --import tsx node_modules/qunit/bin/qunit.js
- * 'test/**\/*-test.ts'` directly -> rc=0, 115 pass / 0 fail. The exact
- * mutation `b9d087a` exists to catch went green again, because every
- * plain-node test was reading a stale `dist/`.
+ * The control, re-measured AT THIS HEAD rather than quoted: apply the M2
+ * mutation (`LOADABLE_EXTENSIONS` -> `[ 'js', 'ts' ]`) to
+ * `src/util/import-config.ts`, skip the build, run
+ * `node --import tsx node_modules/qunit/bin/qunit.js 'test/**\/*-test.ts'`
+ * directly.
+ *
+ *   with `staleDistArtifacts()` stubbed to `[]`  ->  rc=0, 131 pass / 0 fail
+ *   with the guard live                          ->  rc=1, 116 pass / 15 fail
+ *
+ * Fully green without it. The exact mutation `b9d087a` exists to catch went
+ * green again, because every plain-node test was reading a stale `dist/`. This
+ * guard is what flips it back to red -- that is a control, not an assertion.
+ *
+ * (The same control read `rc=0, 115 pass / 0 fail` when it was first taken, at
+ * `183b34a`. That figure was right at that commit; it is dated, not wrong. The
+ * suite has grown by 16 tests since.)
  *
  * `pnpm test` is `pnpm build && qunit`, so CI was never exposed. This bites
  * watch mode and IDE test runners, which invoke the qunit binary directly —

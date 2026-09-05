@@ -59,9 +59,18 @@ export function writeRootFile(rootPath: string, relativePath: string, content: s
   writeFileSync(target, content);
 }
 
-/** A module entry point whose instance records that `init()` ran. */
+/**
+ * A module entry point whose instance records that `init()` ran, and whose
+ * CLASS counts how many times it ran across every instance.
+ *
+ * The counter is what lets T22 tell one instantiation from two. `modulePromises`
+ * is keyed by module name, so a module loaded twice resolves the same deferred
+ * promise twice and `waitForModule` cannot see the duplicate; the count can.
+ * Each fixture is written to its own temp directory, so the ESM registry gives
+ * every test a fresh class object and the counters cannot cross tests.
+ */
 export function moduleSource(className: string): string {
-  return `export default class ${className} {\n  initialized = false;\n  async init() { this.initialized = true; }\n}\n`;
+  return `export default class ${className} {\n  static initCount = 0;\n  initialized = false;\n  async init() { this.initialized = true; ${className}.initCount++; }\n}\n`;
 }
 
 export function environmentSource(config: Record<string, unknown>): string {

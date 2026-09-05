@@ -445,6 +445,50 @@ module('[Unit] loadModules', function(hooks) {
     );
   });
 
+  // T22 — FORWARD GUARD for abofs/stonyx#106 rule 3. Green today, green under a
+  // CORRECT rule 3, red under the concat-shaped one.
+  //
+  // The hazard: rule 3 written at modules.ts:61 as
+  //     [ ...Object.keys(dependencies), ...Object.keys(devDependencies) ].filter(…)
+  // is a plausible, correct-LOOKING shape, and against every other fixture in
+  // this suite it is indistinguishable from the correct union. Measured at this
+  // head, with this test deleted: concat 97/1 and spread-union 97/1, T2 the sole
+  // failure in both. With this test present: concat 97/2, spread-union 98/1.
+  //
+  // A module declared in BOTH maps appears twice in a concatenated list, so it
+  // is instantiated twice and its `init()` runs twice. Measured out of suite on
+  // a dual-declared root, `modules.length` / `initCount`:
+  //     head (no rule 3)      1 / 1
+  //     spread union          1 / 1
+  //     concat                2 / 2
+  // Every other fixture here is declared in exactly one map, so `:61`/`:66`
+  // cannot see the duplicate without this one.
+  //
+  // The discriminator has to count INSTANCES. `modulePromises` is keyed by
+  // module name (modules.ts:19), so a duplicate load just resolves the same
+  // deferred promise twice — `waitForModule`/`raceModule` read 'resolved' either
+  // way. `modules.length` and the class-level `initCount` from `moduleSource`
+  // are the two observables that differ.
+  test('loads a module declared in both dependencies and devDependencies exactly once', async function(assert) {
+    const rootPath = root({
+      name: 't22-app',
+      dependencies: { '@stonyx/t22-dual': '1.0.0' },
+      devDependencies: { '@stonyx/t22-dual': '1.0.0' },
+    });
+    installAsyncModule(rootPath, '@stonyx/t22-dual', 'T22Dual', { port: 22 });
+
+    const config: StoynxConfig = {};
+    const modules = await loadModules(config, rootPath, stubChronicle().asChronicle());
+
+    assert.strictEqual(modules.length, 1, 'the dual-declared module was instantiated once, not once per map');
+    assert.strictEqual(modules[0]!.constructor.name, 'T22Dual', 'and the instance is the module class');
+    assert.strictEqual(
+      (modules[0]!.constructor as unknown as { initCount: number }).initCount,
+      1,
+      'init() ran exactly once'
+    );
+  });
+
   // T12 — GUARD. Dies under: swap the `mergeObject(moduleConfig, userConfig)`
   // argument order at modules.ts:107.
   test('merges module defaults under user config: user wins, defaults fill, extras survive', async function(assert) {

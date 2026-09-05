@@ -133,30 +133,17 @@ export default async function loadModules(
     promise.ready = new Promise<void>(resolve => promise.resolve = resolve);
   }
 
-  // Pre-flight: invariant I1, "one core". Before ANY module entry point is
-  // imported, because the point of the check is the module that would NOT
-  // throw — it would load, initialise, and register its hooks on a second
-  // singleton that nobody started. See src/util/duplicate-core.ts.
+  // DISCOVERY, hoisted above the pre-flight.
   //
-  // `console.warn` for the inconclusive probes: fail-open is the policy, but
-  // "we could not check" must be distinguishable from "we checked and it is
-  // fine". This is the file's existing idiom for a non-fatal loader advisory.
-  const foreignCores = findForeignCores(
-    moduleDependencies.map(moduleName => ({ name: moduleName, dir: `${rootPath}/node_modules/${moduleName}` })),
-    undefined,
-    message => console.warn(message)
-  );
-
-  if (foreignCores.length > 0) throw new Error(duplicateCoreMessage(foreignCores));
-
-  // Standalone module configuration
-  if (Array.isArray(rootPackage.keywords) && rootPackage.keywords.includes('stonyx-module')) {
-    configureLog(chronicle, projectName, config as Record<string, unknown>);
-
-    const entryPoint = typeof rootPackage.main === 'string' ? rootPackage.main : '';
-    const { default: moduleClass } = await import(`${rootPath}/${entryPoint}`);
-    initializeModule(projectName, moduleClass, modules, initPromises);
-  }
+  // The pre-flight must check exactly what the loader loads, and no more.
+  // `@stonyx/*` is a NAME test, not a membership test: a scoped devDependency
+  // without the `stonyx-module` keyword is warned about and skipped below —
+  // never imported, never configured, incapable of registering anything on any
+  // singleton — and refusing to boot over its nested copy prescribed the MODULE
+  // AUTHOR's remedy to a package that is not a module and has no such
+  // obligation. #106 says the two predicates are different in as many words.
+  // So the keyword gate runs first and the pre-flight sees only real modules.
+  const discovered: { name: string; dir: string; package: Record<string, unknown>; keywords: string[] }[] = [];
 
   for (const moduleName of moduleDependencies) {
     const modulePackage = await readFile(`${rootPath}/node_modules/${moduleName}/package.json`, { json: true, missingFileCallback: (_filePath: string) => {
@@ -173,6 +160,47 @@ export default async function loadModules(
       continue;
     }
 
+    discovered.push({
+      name: moduleName,
+      dir: `${rootPath}/node_modules/${moduleName}`,
+      package: modulePackage as Record<string, unknown>,
+      keywords,
+    });
+  }
+
+  // Pre-flight: invariant I1, "one core". Before ANY module entry point is
+  // imported, because the point of the check is the module that would NOT
+  // throw — it would load, initialise, and register its hooks on a second
+  // singleton that nobody started. See src/util/duplicate-core.ts.
+  //
+  // It runs over every discovered module, SYNC AND ASYNC ALIKE. A sync module
+  // is never imported by the loader, so its second core never announces itself
+  // — which is exactly why the mechanism is a pre-flight and not a better
+  // catch. The consequence is that `stonyx-async` no longer decides whether a
+  // duplicate core is loud: both arms are refused here, by the same check,
+  // before the keyword is ever read. docs/modules.md documents that.
+  //
+  // `console.warn` for the inconclusive probes: fail-open is the policy, but
+  // "we could not check" must be distinguishable from "we checked and it is
+  // fine". This is the file's existing idiom for a non-fatal loader advisory.
+  const foreignCores = findForeignCores(
+    discovered.map(({ name, dir }) => ({ name, dir })),
+    undefined,
+    message => console.warn(message)
+  );
+
+  if (foreignCores.length > 0) throw new Error(duplicateCoreMessage(foreignCores));
+
+  // Standalone module configuration
+  if (Array.isArray(rootPackage.keywords) && rootPackage.keywords.includes('stonyx-module')) {
+    configureLog(chronicle, projectName, config as Record<string, unknown>);
+
+    const entryPoint = typeof rootPackage.main === 'string' ? rootPackage.main : '';
+    const { default: moduleClass } = await import(`${rootPath}/${entryPoint}`);
+    initializeModule(projectName, moduleClass, modules, initPromises);
+  }
+
+  for (const { name: moduleName, package: modulePackage, keywords } of discovered) {
     if (!keywords.includes('stonyx-async')) {
       modulePromises[moduleName].resolve();
       continue;

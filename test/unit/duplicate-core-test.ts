@@ -31,7 +31,7 @@ import {
   runningCore,
   type ForeignCore,
 } from '../../src/util/duplicate-core.js';
-import { createRoot, installModule, moduleSource, removeRoot, stubChronicle } from '../helpers/module-fixture.js';
+import { captureConsole, createRoot, installModule, moduleSource, removeRoot, stubChronicle } from '../helpers/module-fixture.js';
 
 const { module, test } = QUnit;
 
@@ -484,6 +484,98 @@ module('[Unit] loadModules pre-flight', function(hooks) {
     assert.ok(error?.message.startsWith('Stonyx: 2 copies of the framework are installed'), `got: ${error?.message}`);
     assert.ok(error?.message.includes('0.0.0-nested'), 'and names the version the module would have imported');
     assert.notOk(existsSync(dupSentinel), 'and the module entry point was never evaluated');
+  });
+
+  /** Drives `loadModules` and reports what happened, warnings included. */
+  async function boot(rootPath: string): Promise<{ error?: Error; warnings: string[] }> {
+    const capture = captureConsole();
+
+    try {
+      await loadModules({}, rootPath, stubChronicle().asChronicle());
+
+      return { warnings: capture.warnings };
+    } catch (error) {
+      return { error: error as Error, warnings: capture.warnings };
+    } finally {
+      capture.restore();
+    }
+  }
+
+  // D12 — SCOPE. The pre-flight must check what the loader LOADS, not what
+  // matches `@stonyx/*`. A scoped devDependency with no `stonyx-module` keyword
+  // is warned about and skipped by the loader — never imported, never given a
+  // config, incapable of registering anything on any singleton — and refusing
+  // over its nested copy prescribed the module-author remedy ("declare stonyx
+  // in devDependencies plus a non-optional peerDependencies range") to a
+  // package that is not a module.
+  //
+  // Two controls, so a green here cannot come from an inert harness: the SAME
+  // fixture with the keyword added does refuse, and the same non-module WITHOUT
+  // a nested core also boots (so this is not reporting on absence).
+  test('D12: a scoped dependency the loader skips does not refuse the boot', async function(assert) {
+    const rootPath = root({ name: 'd12-app', devDependencies: { '@stonyx/d12-not-a-module': '1.0.0' }});
+    installModule(rootPath, '@stonyx/d12-not-a-module', { main: 'main.js', keywords: [ 'some-other-thing' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(rootPath, '@stonyx/d12-not-a-module', '0.0.0-d12');
+
+    const skipped = await boot(rootPath);
+
+    assert.notOk(skipped.error, `a package the loader skips does not brick the boot, got: ${skipped.error?.message}`);
+    assert.ok(
+      skipped.warnings.some(warning => warning.includes('must contain the "stonyx-module" keyword')),
+      'and the loader still says why it skipped it'
+    );
+
+    const control = root({ name: 'd12-control-app', devDependencies: { '@stonyx/d12-is-a-module': '1.0.0' }});
+    // ASYNC control on purpose: D13 owns the sync arm, and a mutation that
+    // exempts sync modules must red D13 alone rather than both.
+    installFixtureModule(control, '@stonyx/d12-is-a-module', 'D12IsAModule');
+    symlinkSync(repoRoot, join(control, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(control, '@stonyx/d12-is-a-module', '0.0.0-d12');
+
+    const withKeyword = await boot(control);
+
+    assert.ok(
+      withKeyword.error?.message.startsWith('Stonyx: 2 copies'),
+      `control: the identical tree WITH the keyword is refused, got: ${withKeyword.error?.message}`
+    );
+
+    const noCore = root({ name: 'd12-nocore-app', devDependencies: { '@stonyx/d12-plain': '1.0.0' }});
+    installModule(noCore, '@stonyx/d12-plain', { main: 'main.js', keywords: [ 'some-other-thing' ]});
+    symlinkSync(repoRoot, join(noCore, 'node_modules', 'stonyx'), 'dir');
+
+    assert.notOk((await boot(noCore)).error, 'control: and a non-module with no nested core boots too');
+  });
+
+  // D13 — the SYNC arm, which is the most consumer-visible change in #108 and
+  // was measured only against `stonyx-async` fixtures before this round. Every
+  // D1-D9 and acceptance fixture carries `stonyx-async`; a `stonyx-module`-only
+  // module with a skewed pin is the case that flips from BOOTING to a hard
+  // refusal, and docs/modules.md documented it as "booted, exit 0, no warning".
+  //
+  // It is refused deliberately: the loader never imports a sync module, so its
+  // second singleton never announces itself, and that invisibility is the whole
+  // reason I1 is a pre-flight. The keyword is no longer the variable.
+  test('D13: a SYNC-only module with a second core is refused, and the same module with one core boots', async function(assert) {
+    const dup = root({ name: 'd13-dup-app', devDependencies: { '@stonyx/d13-sync': '1.0.0' }});
+    installModule(dup, '@stonyx/d13-sync', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(dup, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(dup, '@stonyx/d13-sync', '0.0.0-d13-nested');
+
+    const refused = await boot(dup);
+
+    assert.ok(refused.error?.message.startsWith('Stonyx: 2 copies'), `got: ${refused.error?.message}`);
+    assert.ok(refused.error?.message.includes('0.0.0-d13-nested'), 'naming the copy the sync module would have imported');
+    assert.ok(refused.error?.message.includes('@stonyx/d13-sync'), 'and the module, which carries no stonyx-async keyword');
+
+    const clean = root({ name: 'd13-clean-app', devDependencies: { '@stonyx/d13-sync-clean': '1.0.0' }});
+    installModule(clean, '@stonyx/d13-sync-clean', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(clean, 'node_modules', 'stonyx'), 'dir');
+
+    const booted = await boot(clean);
+
+    assert.notOk(booted.error, `control: the identical sync module with ONE core boots, got: ${booted.error?.message}`);
+    assert.deepEqual(booted.warnings, [], 'control: silently — so the refusal above is the second core, not the keyword');
   });
 
   // D6 — the tree #108 measured has THREE copies, not two. Reporting only the

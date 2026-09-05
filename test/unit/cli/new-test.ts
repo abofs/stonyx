@@ -2,6 +2,7 @@ import QUnit from 'qunit';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { PassThrough } from 'stream';
 import { fileURLToPath } from 'url';
 import newCommand, {
   runPnpmInstall,
@@ -341,15 +342,38 @@ QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function
     }
   });
 
+  // READ THIS BEFORE TREATING GREEN AS SAFE.
+  //
+  // This test *asserts* `latest`, it does not merely stop forbidding it, and that is
+  // correct only under a precondition this suite cannot check. `latest` is the right
+  // *module* dist-tag for a stable core -- but only while each module's own `latest`
+  // release is built against a stable core. That is false today:
+  // `@stonyx/orm@latest` is `0.3.1` and pins `stonyx@0.2.3-beta.11`, so a stable core
+  // scaffolded right now would reproduce abofs/stonyx#113 through the *module* path
+  // with this test still green.
+  //
+  // The branch is unreachable today only because the stable core (`0.2.2`) ships no
+  // `bin`. It goes live the moment abofs/stonyx#115 advances `latest`, and #115 now
+  // carries the constraint that makes this safe: the advance must cover the **module**
+  // dist-tags, not only the core's, verified from a scaffolded consumer by counting
+  // resolved cores. Nothing here can enforce that -- it is a release precondition, not
+  // a property of the generator -- so it is named in every assertion message below.
   QUnit.test('on the stable line, modules are requested at "latest" by design', async function (assert) {
     const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
     const options = mod.MODULE_OPTIONS as { package: string }[];
     const pkg = JSON.parse(generatePackageJson('test-app', options as Parameters<typeof generatePackageJson>[1], '0.2.3'));
 
-    assert.strictEqual(coreSpecifier(pkg), '0.2.3', 'the core is still pinned exactly');
+    assert.strictEqual(
+      coreSpecifier(pkg), '0.2.3',
+      'the core is still pinned exactly -- the #113 invariant, and what makes the module tag survivable'
+    );
 
     for (const option of options) {
-      assert.strictEqual(pkg.devDependencies[option.package], 'latest', `${option.package} at "latest" on the stable line`);
+      assert.strictEqual(
+        pkg.devDependencies[option.package], 'latest',
+        `${option.package} at "latest" on the stable line -- correct only once that tag points at a release ` +
+        'built against a stable core; abofs/stonyx#115 must advance the module dist-tags, not only the core\'s'
+      );
     }
   });
 
@@ -393,6 +417,16 @@ QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function
       assert.throws(
         () => generatePackageJson('test-app', modules, version), /not a semver version|Could not read/,
         `"${version}" is refused by the emission path`
+      );
+
+      // ...and with nothing selected. `generatePackageJson` has no version check of
+      // its own -- it validates by calling `releaseTagFor` unconditionally -- so the
+      // guard is only as unconditional as that call site. Making it conditional on
+      // `selectedModules.length` would emit an unvalidated core for an empty
+      // selection, which is the same guard-that-does-not-run shape one scope down.
+      assert.throws(
+        () => generatePackageJson('test-app', [], version), /not a semver version|Could not read/,
+        `"${version}" is refused with no modules selected`
       );
 
       // And by the exported mapping itself, which otherwise answered "latest".
@@ -453,6 +487,101 @@ QUnit.module('[Unit] CLI New — failed install is not a success (#113)', functi
 
     assert.true(rejected, 'a spawn failure rejects rather than resolving');
   });
+
+  // The propagation itself -- the whole point of the change -- was reported as
+  // needing an injectable installer and left uncovered. It does not. `runPnpmInstall`
+  // calls `spawn('pnpm', ...)` with no `env` option, so the child inherits
+  // `process.env` at spawn time and resolves `pnpm` from `PATH`: prepending a
+  // directory holding a two-line `pnpm` gives a deterministic, offline, sub-second
+  // install failure through the real code path, with no source change. `args[0]`
+  // supplies the project name so `prompt()` is skipped, and `confirm()` only checks
+  // `process.stdin.isTTY`, so a `PassThrough` with the flag forced drives the
+  // module loop.
+  QUnit.test('a failed install exits non-zero and prints no success banner', async function (assert) {
+    const { exitCode, output } = await runNewHeadless(tempDir, 1);
+
+    assert.strictEqual(exitCode, 1, 'process.exitCode is 1 after a failed install');
+    assert.false(output.includes('created successfully'), 'the success banner is not printed');
+    assert.true(output.includes('dependencies are NOT installed'), 'the failure is stated on stderr');
+    assert.true(
+      await fileExists(path.join(tempDir, 'work', 'my-app', 'package.json')),
+      'the project is still scaffolded -- the non-zero code reports the install, not the scaffold'
+    );
+  });
+
+  // Control for the test above: it proves the harness actually reaches the install
+  // step and can observe both outcomes, so a green failure-arm cannot be an artefact
+  // of the command erroring out earlier.
+  QUnit.test('a successful install leaves the exit code alone and prints the success banner', async function (assert) {
+    const { exitCode, output } = await runNewHeadless(tempDir, 0);
+
+    assert.strictEqual(exitCode, undefined, 'nothing sets a failure code on the success path');
+    assert.true(output.includes('created successfully'), 'the success banner is printed');
+  });
+
+  /**
+   * Runs the real `newCommand` end-to-end and headless, with a fake `pnpm` on `PATH`
+   * that exits `pnpmExitCode`. Everything it mutates on `process` -- `PATH`, `stdin`,
+   * `cwd`, `exitCode`, and the two output streams -- is restored in `finally`.
+   */
+  async function runNewHeadless(
+    dir: string,
+    pnpmExitCode: number
+  ): Promise<{ exitCode: number | string | undefined; output: string }> {
+    const binDir = path.join(dir, 'fake-bin');
+    const workDir = path.join(dir, 'work');
+
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, 'pnpm'), `#!/bin/sh\nexit ${pnpmExitCode}\n`, { mode: 0o755 });
+
+    const originalPath = process.env.PATH;
+    const originalCwd = process.cwd();
+    const originalExitCode = process.exitCode;
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, 'stdin')!;
+    const stdoutWrite = process.stdout.write;
+    const stderrWrite = process.stderr.write;
+
+    const fakeStdin = new PassThrough() as PassThrough & { isTTY?: boolean };
+    fakeStdin.isTTY = true;
+
+    // Answered repeatedly rather than once: each `confirm()` opens its own readline
+    // over this stream, so an answer written between two interfaces is simply resent.
+    const answering = setInterval(() => fakeStdin.write('n\n'), 5);
+
+    let output = '';
+
+    try {
+      process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ''}`;
+      Object.defineProperty(process, 'stdin', { value: fakeStdin, configurable: true });
+      process.stdout.write = ((chunk: unknown) => { output += String(chunk); return true; }) as typeof process.stdout.write;
+      process.stderr.write = ((chunk: unknown) => { output += String(chunk); return true; }) as typeof process.stderr.write;
+      process.chdir(workDir);
+      process.exitCode = undefined;
+
+      let timer: NodeJS.Timeout;
+      const guard = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('newCommand did not settle within 30s')), 30_000);
+      });
+
+      try {
+        await Promise.race([newCommand({ args: ['my-app'] }), guard]);
+      } finally {
+        clearTimeout(timer!);
+      }
+
+      return { exitCode: process.exitCode, output };
+    } finally {
+      clearInterval(answering);
+      process.stdout.write = stdoutWrite;
+      process.stderr.write = stderrWrite;
+      process.chdir(originalCwd);
+      Object.defineProperty(process, 'stdin', stdinDescriptor);
+      process.env.PATH = originalPath;
+      process.exitCode = originalExitCode;
+      fakeStdin.destroy();
+    }
+  }
 });
 
 QUnit.module('[Unit] CLI New — scaffolded manifest on disk (#113)', function (hooks) {

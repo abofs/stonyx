@@ -178,10 +178,18 @@ export function generatePackageJson(
   selectedModules: ModuleOption[],
   coreVersion: string = readCoreVersion()
 ): string {
-  // `coreVersion` is injectable for tests, so the shape is asserted here too --
-  // otherwise an injected non-semver string reaches the manifest verbatim and
-  // `releaseTagFor` falls through to `latest`.
-  assertVersionShape(coreVersion, 'the supplied core version');
+  // Resolved first, before anything is emitted, and unconditionally -- deliberately
+  // not inside the module loop below. `releaseTagFor` asserts the version's shape as
+  // its first act, so this one call is also what stops an injected non-semver
+  // `coreVersion` from reaching the manifest verbatim.
+  //
+  // A second `assertVersionShape(coreVersion, ...)` stood at the top of this function
+  // until abofs/stonyx#118's review: deleting it left the suite green, because this
+  // call already rejects the same value on every path. It was removed rather than
+  // left as decoration. The invariant that replaces it is positional -- keep this
+  // call above the emission and the guard stays load-bearing; push it under an
+  // `if (selectedModules.length)` and the core becomes unvalidated again.
+  const moduleTag = releaseTagFor(coreVersion);
 
   // The framework is a runtime dependency of the application, pinned exactly to
   // the core that generated the project.
@@ -195,8 +203,6 @@ export function generatePackageJson(
 
   // Modules are discovered from devDependencies (see docs/modules.md), and are
   // requested on the core's own release line rather than at `latest`.
-  const moduleTag = releaseTagFor(coreVersion);
-
   for (const mod of selectedModules) {
     devDependencies[mod.package] = moduleTag;
   }

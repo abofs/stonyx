@@ -17,10 +17,13 @@
  * module name unique to that test.
  */
 import QUnit from 'qunit';
+import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import loadModules from '../../src/modules.js';
+import { assertDistIsFresh } from '../helpers/dist-freshness.js';
 import {
   coreSeenBy,
   duplicateCoreMessage,
@@ -33,6 +36,31 @@ import { createRoot, installModule, moduleSource, removeRoot, stubChronicle } fr
 const { module, test } = QUnit;
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const execFileAsync = promisify(execFile);
+const coreSeenByScript = resolve(dirname(fileURLToPath(import.meta.url)), '../helpers/core-seen-by-plain-node.mjs');
+
+/**
+ * Same hard bound as the other subprocess suites in this repo: `execFile` has
+ * no default timeout and this repo sets no `QUnit.config.testTimeout`, so an
+ * unbounded child hangs the run with no TAP.
+ */
+const SUBPROCESS_TIMEOUT_MS = 20_000;
+
+/** Runs `coreSeenBy` in a process STARTED with the given NODE_PATH. */
+async function coreSeenByWithNodePath(moduleDir: string, nodePath: string): Promise<{ version: string } | null> {
+  assertDistIsFresh('coreSeenByWithNodePath');
+
+  const { stdout, stderr } = await execFileAsync('node', [ coreSeenByScript, moduleDir ], {
+    timeout: SUBPROCESS_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    env: { ...process.env, NODE_PATH: nodePath },
+  });
+  const marker = stdout.split('__CORE_SEEN_BY__')[1];
+
+  if (!marker) throw new Error(`probe produced no result. stdout: ${stdout}\nstderr: ${stderr}`);
+
+  return JSON.parse(marker) as { version: string } | null;
+}
 
 const roots: string[] = [];
 
@@ -115,6 +143,52 @@ module('[Unit] duplicate-core detector', function(hooks) {
     assert.notStrictEqual(foreign[0]?.moduleCore.root, foreign[0]?.runningCore.root, 'which is a different path');
   });
 
+  // D7 — the pnpm tree shape, and the control for the realpath narrowing in
+  // `coreSeenBy`. `stonyx new` installs with pnpm (src/cli/new.ts:335), so this
+  // IS the shape the documented procedure produces: every entry under
+  // `node_modules/@stonyx/` is a symlink into the store, and Node resolves that
+  // symlink BEFORE resolving the module's own imports.
+  //
+  // Without the realpath, the walk reads the app's flat `node_modules`, finds
+  // the app's own core, and reports nothing — the check passes vacuously on
+  // exactly the installer that produces the defect. Measured: with
+  // `realPath(moduleDir)` replaced by `moduleDir`, D1-D6 all stay GREEN and
+  // only this test reds.
+  test('D7: resolves through a pnpm store symlink, not through the flat link path', function(assert) {
+    const rootPath = root({ name: 'd7-app' });
+    const store = join(rootPath, 'node_modules', '.pnpm', '@stonyx+d7-mod@1.0.0', 'node_modules');
+
+    mkdirSync(join(store, '@stonyx', 'd7-mod'), { recursive: true });
+    writeFileSync(
+      join(store, '@stonyx', 'd7-mod', 'package.json'),
+      JSON.stringify({ name: '@stonyx/d7-mod', version: '1.0.0', type: 'module', main: 'main.js', keywords: [ 'stonyx-module' ]})
+    );
+    mkdirSync(join(store, 'stonyx'), { recursive: true });
+    writeFileSync(
+      join(store, 'stonyx', 'package.json'),
+      JSON.stringify({ name: 'stonyx', version: '0.0.0-pnpm-nested', type: 'module', main: 'dist/main.js' })
+    );
+
+    // The app's flat view: both entries are symlinks, exactly as pnpm writes them.
+    mkdirSync(join(rootPath, 'node_modules', '@stonyx'), { recursive: true });
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+    symlinkSync(join(store, '@stonyx', 'd7-mod'), join(rootPath, 'node_modules', '@stonyx', 'd7-mod'), 'dir');
+
+    const linkPath = join(rootPath, 'node_modules', '@stonyx', 'd7-mod');
+
+    assert.notStrictEqual(realpathSync(linkPath), linkPath, 'premise: the module entry really is a symlink');
+    assert.strictEqual(
+      coreSeenBy(linkPath)?.version,
+      '0.0.0-pnpm-nested',
+      'the core is resolved from the store location, which is where node resolves it from'
+    );
+    assert.strictEqual(
+      findForeignCores([ { name: '@stonyx/d7-mod', dir: linkPath } ]).length,
+      1,
+      'and the module is reported'
+    );
+  });
+
   // D3 — FAIL DIRECTION. The guard converts a silent wrong state into a loud
   // one; it must not invent a boot failure out of an inconclusive probe.
   test('D3: fails open — a module that cannot resolve stonyx at all is not reported', function(assert) {
@@ -128,6 +202,47 @@ module('[Unit] duplicate-core detector', function(hooks) {
       findForeignCores([ { name: '@stonyx/d3-mod', dir: moduleDir } ], null),
       [],
       'nor when the running core cannot identify itself either'
+    );
+  });
+
+  // D8 — CONTROL for the ancestor filter in `coreSeenBy`. `require.resolve.paths`
+  // appends the CJS global folders (NODE_PATH, ~/.node_modules, the node
+  // prefix) after the node_modules walk. ESM ignores all of them, so honouring
+  // them would invent a "duplicate core" out of an environment variable that
+  // the real import never consults — turning a boot that works into a refusal.
+  //
+  // Must run in a subprocess: NODE_PATH is read once at bootstrap into
+  // `Module.globalPaths`, so setting `process.env.NODE_PATH` from a test is a
+  // check that cannot fail. The premise assertion below is what proves the
+  // contaminated environment was actually delivered to the child.
+  test('D8: a stonyx reachable only via NODE_PATH is ignored, not reported as a duplicate', async function(assert) {
+    const rootPath = root({ name: 'd8-app' });
+    installModule(rootPath, '@stonyx/d8-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const contaminated = root({ name: 'd8-nodepath-store' });
+    const ambientCore = join(contaminated, 'stonyx');
+
+    mkdirSync(ambientCore, { recursive: true });
+    writeFileSync(
+      join(ambientCore, 'package.json'),
+      JSON.stringify({ name: 'stonyx', version: '0.0.0-ambient', type: 'module', main: 'dist/main.js' })
+    );
+
+    // Premise: a module with NO reachable core is where NODE_PATH would win,
+    // and it is the only place the filter is observable at all.
+    const isolated = root({ name: 'd8-isolated-app' });
+    installModule(isolated, '@stonyx/d8-isolated', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+
+    assert.strictEqual(
+      (await coreSeenByWithNodePath(join(rootPath, 'node_modules', '@stonyx/d8-mod'), contaminated))?.version,
+      runningCore()?.version,
+      'premise: with a real core in the tree, that is what is reported'
+    );
+    assert.strictEqual(
+      await coreSeenByWithNodePath(join(isolated, 'node_modules', '@stonyx/d8-isolated'), contaminated),
+      null,
+      'and a core reachable only through NODE_PATH is not reported at all'
     );
   });
 

@@ -9,10 +9,13 @@
  * Node REFUSES that file under `node_modules`. Asserted from inside the tsx
  * process the module loads fine and the assertion proves nothing.
  *
- * It reports BOTH channels separately, which is the fact under test: the
- * loader's precise error reaches stderr via `console.error` at
- * `src/modules.ts:117`, while the error `loadModules` actually THROWS is the
- * generic relabel at `src/modules.ts:118`.
+ * It reports BOTH channels separately. That WAS the fact under test — the
+ * loader's precise error reached stderr via a bare `console.error` while the
+ * thrown error was a generic relabel. abofs/stonyx#108 moved the diagnosis
+ * into the thrown error (with `cause`) and removed the side-channel log, so
+ * the stderr array is now expected to be EMPTY. Both channels are still
+ * reported because "nothing was logged behind the caller" is itself an
+ * assertion, and it can only be made by a probe that would have seen it.
  *
  * Usage: node test/helpers/load-modules-plain-node.mjs <rootPath>
  * Prints one line: __LOAD_MODULES__<json> with { thrown, stderr }.

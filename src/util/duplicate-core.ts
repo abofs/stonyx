@@ -1,0 +1,448 @@
+/**
+ * Invariant I1 of the Sprint 93 install-and-boot cluster — "one core".
+ *
+ * At `Stonyx.start()`, every discovered module must resolve the SAME physical
+ * `stonyx` package root as the running core. Otherwise the app has two
+ * framework singletons: `loadModules` runs on copy A, and a module whose own
+ * subtree carries copy B registers its config, its Chronicle types and its
+ * lifecycle hooks on B — which nobody ever `start()`ed.
+ *
+ * Why a PRE-FLIGHT and not a better `catch`. The catch only sees modules that
+ * happen to touch `Stonyx.config` at load time and therefore throw
+ * "Stonyx has not been initialized yet". A module that does not touch it at
+ * load time does not throw at all: it loads, it initialises, it reports
+ * success, and its hooks silently never fire. That failure is invisible today,
+ * and no improvement to the catch can reach it. Multiple cores is never a
+ * valid state, so it is detected up front and refused.
+ *
+ * Measured shape this exists for (abofs/stonyx#108, `stonyx new` scaffold at
+ * 0.2.3-beta.96): three distinct copies of the core on disk — `0.2.2`,
+ * `0.2.3-beta.6`, `0.2.3-beta.11` — because five sibling repos pin the core
+ * EXACTLY in their own `dependencies`, and an exact pin cannot dedupe against
+ * a sibling's different exact pin.
+ */
+import { readFileSync, realpathSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** A resolved `stonyx` package: where it physically is, and what version. */
+export interface CorePackage {
+  /** Absolute, symlink-resolved package root (the directory holding package.json). */
+  root: string;
+  version: string;
+}
+
+export interface ForeignCore {
+  moduleName: string;
+  moduleCore: CorePackage;
+  runningCore: CorePackage;
+}
+
+/** Symlinks resolved so `/tmp/...` and `/private/tmp/...` — and pnpm's
+ * `node_modules/x -> .pnpm/x@v/node_modules/x` — compare equal. */
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * Told when the probe could not reach a conclusion.
+ *
+ * FAIL-OPEN IS THE POLICY; SILENCE IS NOT. `findForeignCores` must never invent
+ * a boot failure out of an inconclusive probe — but "we could not check" has to
+ * be distinguishable from "we checked and it is fine", because the states that
+ * fail open are exactly the states in which a genuine second core is present
+ * and unreported. Measured on trees that DO carry a second core, each of these
+ * boots clean and silent while the control throws in the same run:
+ *
+ *   - an interposed `dist/package.json`, so the running core cannot name itself
+ *   - a nested `stonyx/package.json` that is not valid JSON
+ *   - the same file at `chmod 000`
+ *
+ * A reporter can only write a line. It cannot change the outcome.
+ */
+export type InconclusiveReporter = (message: string) => void;
+
+const IGNORE: InconclusiveReporter = () => {};
+
+/**
+ * The directories ESM consults for a bare specifier, in the order it consults
+ * them: `<d>/node_modules` for every ancestor-or-self `d` of `fromDir`.
+ *
+ * THE RESOLVER BEING MODELLED IS ESM. `loadModules` reaches every module
+ * through `await import`, so the copy of `stonyx` a module "would import" is
+ * whatever ESM's PACKAGE_RESOLVE finds — not whatever CJS finds. This function
+ * is generated rather than filtered, and that is the fix for a defect in each
+ * direction.
+ *
+ * TOO WIDE, the previous defect. The candidates used to come from
+ * `require.resolve.paths`, which is the CJS walk FOLLOWED BY the CJS global
+ * folders — `NODE_PATH`, `~/.node_modules`, `~/.node_libraries`, the node
+ * prefix. ESM ignores every one of those, so honouring them invents a
+ * "duplicate" out of an ambient environment variable that the real import never
+ * consults. This workspace exports `NODE_PATH` at a different `stonyx`
+ * (abofs/stonyx#107), so that false positive is not hypothetical: it flips a
+ * tree that boots into a hard refusal. Generating the walk REMOVES that failure
+ * mode rather than screening for it — nothing here reads the environment, so
+ * there is no list to get the screen wrong on.
+ *
+ * TOO NARROW, and this one was a SILENT MISS. WHICH CJS ENUMERATION IS MEANT
+ * IS PART OF THE CLAIM, because the two are not the same set: the walk PROPER
+ * is `Module._nodeModulePaths`, and `require.resolve.paths` is that walk
+ * FOLLOWED BY the global folders of the paragraph above. It is the walk proper
+ * that never descends into a directory already named `node_modules`. **ESM's
+ * PACKAGE_RESOLVE has no such skip.** Measured with no `NODE_PATH` at all,
+ * from a module at `<app>/node_modules/@stonyx/x`:
+ *
+ *   import.meta.resolve('stonyx') -> <app>/node_modules/node_modules/stonyx/main.js
+ *   await import('stonyx')        -> that copy
+ *   require.resolve('stonyx')     -> MODULE_NOT_FOUND
+ *
+ * A genuine second core there was missed silently. Worse, because ESM reaches
+ * the ancestor `<app>/node_modules` BEFORE `<app>`, that copy SHADOWS a correct
+ * local core at `<app>/node_modules/stonyx` while the pre-flight reported
+ * success — this file's own opening paragraph ("it loads, it initialises, it
+ * reports success, and its hooks silently never fire") surviving the check
+ * written to catch it. Isolating control, moving nothing but the directory: the
+ * same core at `<app>/node_modules/@stonyx/x/node_modules/stonyx` was REFUSED.
+ *
+ * THE SET DELTA, both directions and named per enumeration — node v24.13.0,
+ * from that same module dir. Against the WALK PROPER the difference is one
+ * directory and it is one-sided: `esm \ Module._nodeModulePaths` = exactly
+ * `<app>/node_modules/node_modules` (the miss above), and
+ * `Module._nodeModulePaths \ esm` = `[]`. Against `require.resolve.paths` the
+ * second direction is NOT empty and never was: `require.resolve.paths \ esm` =
+ * the three global folders (measured here: `~/.node_modules`,
+ * `~/.node_libraries` and the node prefix, all three absent on disk) PLUS one
+ * entry per `NODE_PATH` component, four more as this workspace exports it. That tail IS the "too wide" defect above, measured rather than
+ * argued, and it is why an unqualified "the CJS candidates are the same" is
+ * true of one enumeration and false of the other.
+ *
+ * BOUNDED BY ANCESTRY, not by a rule. `<app>/node_modules/node_modules` is a
+ * candidate because `<app>/node_modules` is an ancestor of the module dir; two
+ * levels of nesting is not a candidate, because
+ * `<app>/node_modules/node_modules` is not an ancestor of it. Measured: a core
+ * planted two levels deep resolves to the real core, and is correctly ignored.
+ *
+ * THE REJECTED ALTERNATIVE, and the correction that goes with it. While the
+ * candidates still came from `require.resolve.paths`, `Module.globalPaths` was
+ * reviewed as the screen instead of a shape test, and rejected here on typing
+ * grounds plus the claim that the two "admit the identical set". MEASURED, that
+ * claim is FALSE, and false in the direction that matters: `globalPaths` filters
+ * by STRING MEMBERSHIP, so whenever `NODE_PATH` names a directory that is also
+ * a genuine walk entry, the provenance screen drops the walk entry too. Pointed
+ * at `<app>/node_modules` with a real second core inside it:
+ *
+ *   NODE_PATH=<app>/node_modules   provenance -> no core found
+ *                                  shape      -> 0.0.0-APP-LOCAL-SECOND-CORE
+ *   NODE_PATH unset (control)      provenance -> 0.0.0-APP-LOCAL-SECOND-CORE
+ *                                  shape      -> 0.0.0-APP-LOCAL-SECOND-CORE
+ *
+ * That is a false NEGATIVE on the commonest tree there is — a second core in
+ * the app's own `node_modules` going invisible the moment a developer exports
+ * `NODE_PATH` at it. So the rejection was right and the stated reason was not:
+ * it is not an equal-but-untyped alternative, it is a narrower one that would
+ * have introduced a miss. Generating the walk retires the question entirely —
+ * there is no list to screen and no environment read — which is why neither
+ * screen survives here.
+ *
+ * ORDER IS LOAD-BEARING — it is what makes the shadowing case detectable, since
+ * the first candidate carrying a core is the one returned. It is Node's own
+ * order, verified positionally rather than assumed: a distinct core planted in
+ * each of the first four candidates and removed one at a time, `await import`
+ * selecting exactly this sequence.
+ *
+ * `fromDir` must already be realpath'd; `coreSeenBy` does that first.
+ */
+export function esmNodeModulesWalk(fromDir: string): string[] {
+  const walk: string[] = [];
+
+  for (let dir = fromDir; ; dir = dirname(dir)) {
+    walk.push(join(dir, 'node_modules'));
+
+    if (dirname(dir) === dir) return walk;
+  }
+}
+
+/**
+ * `null` when nothing is there — the ordinary case while walking up.
+ *
+ * A manifest that EXISTS but will not read or parse is a different state, and
+ * it is the fail-open site that had neither a signal nor a test. ENOENT and
+ * ENOTDIR mean "no package here"; anything else — EACCES from a `chmod 000`, or
+ * a SyntaxError from a corrupt manifest, which carries no `code` at all — means
+ * a package root was found and could not be inspected.
+ */
+function readPackageJson(dir: string, report: InconclusiveReporter = IGNORE): Record<string, unknown> | null {
+  const file = join(dir, 'package.json');
+
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      report(
+        `Stonyx: ${file} exists but could not be read as JSON (${code ?? (error as Error)?.name ?? 'unknown error'}), ` +
+        'so it was not checked for a duplicate framework core.'
+      );
+    }
+
+    return null;
+  }
+}
+
+function asCore(dir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
+  const pkg = readPackageJson(dir, report);
+
+  if (!pkg || pkg.name !== 'stonyx') return null;
+
+  // A manifest with no string `version` is malformed, not absent. `'unknown'`
+  // keeps the row in the table: dropping the whole core because one field is
+  // missing would silently un-detect a real duplicate, which is the failure
+  // mode this file exists to remove.
+  return { root: realPath(dir), version: typeof pkg.version === 'string' ? pkg.version : 'unknown' };
+}
+
+/**
+ * The nearest ancestor of `startDir` that OWNS a `package.json`, reported only
+ * if that package is `stonyx`.
+ *
+ * Stops at the first `package.json` rather than at the first one NAMED stonyx:
+ * the first is by definition the package that owns the file, and continuing
+ * past it would walk out of the resolved package and could report an unrelated
+ * ancestor — inside this repo's own worktree, that ancestor is the repo root,
+ * which IS named `stonyx`. That would make every fixture look like a match.
+ *
+ * EXPORTED FOR ITS GUARD. That paragraph is an argument that a behaviour is
+ * load-bearing, and until D15 the entire suite could not tell the two
+ * behaviours apart — a mutant that walked past a non-stonyx manifest survived
+ * every test. A docblock asserting a property with no test that can red is the
+ * defect family this cluster exists to remove, so the function is exported for
+ * one reason: so that claim can fail.
+ */
+export function owningCore(startDir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
+  let dir = realPath(startDir);
+
+  for (;;) {
+    const pkg = readPackageJson(dir, report);
+
+    if (pkg) return pkg.name === 'stonyx' ? asCore(dir, report) : null;
+
+    const parent = dirname(dir);
+
+    if (parent === dir) return null;
+
+    dir = parent;
+  }
+}
+
+/** The `stonyx` copy that is executing this code. */
+export function runningCore(report: InconclusiveReporter = IGNORE): CorePackage | null {
+  return owningCore(dirname(fileURLToPath(import.meta.url)), report);
+}
+
+/**
+ * The `stonyx` copy a package installed at `moduleDir` would import.
+ *
+ * The candidate set is `esmNodeModulesWalk` — Node's ESM walk, generated, in
+ * Node's order — because ESM is the resolver `loadModules` actually uses. The
+ * first candidate that carries a `stonyx` package root wins, which is exactly
+ * how PACKAGE_RESOLVE picks. Manifests are read directly rather than through
+ * `require.resolve`, so a module whose nested core is present but unbuilt is
+ * still detected rather than silently skipped by an `exports` map.
+ *
+ * ONE deliberate narrowing beyond the walk: `moduleDir` is realpath'd FIRST.
+ * Under pnpm, `<app>/node_modules/@stonyx/orm` is a symlink into
+ * `.pnpm/@stonyx+orm@v/node_modules/@stonyx/orm`, and Node resolves that
+ * symlink before resolving the module's own imports. Walking the symlink path
+ * instead reads the app's flat `node_modules` and reports the running core for
+ * every module — the check would pass vacuously on exactly the installer
+ * `stonyx new` uses.
+ *
+ * Returns `null` when no copy is reachable at all — "cannot tell", handled as
+ * not-a-duplicate by `findForeignCores`. Manifests that exist but will not read
+ * go to `report`; see `InconclusiveReporter`.
+ */
+export function coreSeenBy(moduleDir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
+  const resolvedModuleDir = realPath(moduleDir);
+
+  for (const nodeModulesDir of esmNodeModulesWalk(resolvedModuleDir)) {
+    const core = asCore(join(nodeModulesDir, 'stonyx'), report);
+
+    if (core) return core;
+  }
+
+  return null;
+}
+
+/**
+ * Every discovered module that would import a DIFFERENT physical core.
+ *
+ * FAIL DIRECTION — this is the property, not an implementation detail. A
+ * module whose core cannot be resolved, and the case where the running core
+ * cannot identify itself, both report NOTHING. This guard exists to convert a
+ * silent wrong state into a loud one; it must not invent a boot failure out of
+ * an inconclusive probe. Every state it does report has two package roots in
+ * hand and has compared them.
+ */
+export function findForeignCores(
+  modules: { name: string; dir: string }[],
+  core: CorePackage | null | undefined = undefined,
+  report: InconclusiveReporter = IGNORE
+): ForeignCore[] {
+  const resolved = core === undefined ? runningCore(report) : core;
+
+  // The first fail-open, and the one with the widest blast radius: no core, no
+  // comparison, nothing checked at all. Reported here rather than inside
+  // `runningCore` so the same line is emitted however the caller arrived at it.
+  if (!resolved) {
+    report('Stonyx: the running framework core could not identify itself, so the duplicate-core pre-flight was skipped and a second core would not be reported.');
+
+    return [];
+  }
+
+  const foreign: ForeignCore[] = [];
+
+  for (const { name, dir } of modules) {
+    const moduleCore = coreSeenBy(dir, report);
+
+    // A module that resolves NO core is not an inconclusive probe and is not
+    // reported: `coreSeenBy` walks exactly what the module would import, so
+    // "nothing found" means there is no second copy on that path to hide. The
+    // two states that CAN hide one report from where they occur.
+    if (!moduleCore || moduleCore.root === resolved.root) continue;
+
+    foreign.push({ moduleName: name, moduleCore, runningCore: resolved });
+  }
+
+  return foreign;
+}
+
+/**
+ * NOTHING OFF DISK IS TRUSTED FOR DISPLAY — all three interpolated fields.
+ *
+ * `version` and the package root come from a manifest this app did not write.
+ * `moduleName` is narrower — it is a key from the app's own `devDependencies`,
+ * so forging it is an app author forging their own diagnostic — but it is
+ * rendered through the same `padEnd` table, and it caused the same two
+ * symptoms: seeded with ANSI escapes and embedded newlines it FORGED A
+ * COMPLETE TABLE ROW inside the diagnostic (`===> ALERT: run curl evil.sh |
+ * sh <===`, indented to match) and destroyed the column alignment, because the
+ * widths are computed from the raw multi-line label.
+ *
+ * It was left raw at three sites while its two neighbours were sanitised — the
+ * package ROOT derived from that same name is sanitised in the very same row.
+ * Two halves of one string treated differently is an oversight, not a
+ * judgement, so it is closed rather than argued down.
+ *
+ * This renders BEFORE any module entry point is imported, so it is reachable
+ * under `npm install --ignore-scripts`: the one mode in which no third-party
+ * code has otherwise executed.
+ *
+ * Printable ASCII only, and bounded, so a long value cannot push the rest of
+ * the message off screen either.
+ */
+/**
+ * Roots are clamped at `PATH_MAX` rather than at the default 64. A root is the
+ * one thing in this message a consumer acts on directly, and a truncated path
+ * is worse than a long one — the version is a label, the path is an
+ * instruction. Nothing longer than this can exist on the filesystems Node runs
+ * on, so in practice a root is sanitised and never shortened.
+ *
+ * WHAT DECIDES THE LIMIT IS THE COLUMN, not the field's importance. The root is
+ * rendered LAST on its line and is never `padEnd`ed, so its length costs
+ * nothing but its own wrap. The module name and the version are both inside
+ * PADDED columns whose widths are the max over every row, so one long value
+ * there pushes every other row's remaining columns off screen. Those two take
+ * the tight default; a scoped `@stonyx/*` devDependency key is far short of it,
+ * so a real name is sanitised and never shortened either.
+ */
+const PATH_LIMIT = 1024;
+
+function display(value: string, limit = 64): string {
+  const clamped = value.replace(/[^\x20-\x7e]/g, '?');
+
+  return clamped.length > limit ? `${clamped.slice(0, limit)}...` : clamped;
+}
+
+/**
+ * The diagnostic. It replaces the message abofs/stonyx#108 was filed over —
+ * `Stonyx modules with async loading must have a config/environment.js file` —
+ * which named a file that was present and correct, and named a module that was
+ * not the one that failed.
+ *
+ * Per `quality.md`, the replacement states what it does NOT cover, because the
+ * message it replaces is exactly the kind of overstated claim that made the
+ * next reader stop checking.
+ */
+export function duplicateCoreMessage(foreign: ForeignCore[]): string {
+  const [ first ] = foreign;
+
+  if (!first) throw new Error('duplicateCoreMessage called with no foreign cores');
+
+  const names = foreign.map(({ moduleName }) => `"${display(moduleName)}"`).join(', ');
+  const single = foreign.length === 1;
+
+  // DISTINCT roots, not `foreign.length + 1`. Two modules that both resolve
+  // the SAME nested copy are two rows and two copies, not three. Found by
+  // running this against a real `stonyx new` tree: there the naive count was
+  // right by coincidence (three modules, three different copies), and it is
+  // wrong for the commonest npm shape, where siblings on one exact pin dedupe
+  // with each other.
+  const copies = new Set([ first.runningCore.root, ...foreign.map(({ moduleCore }) => moduleCore.root) ]).size;
+
+  const rows: [ string, string, string ][] = [
+    [ 'running core', display(first.runningCore.version), display(first.runningCore.root, PATH_LIMIT) ],
+    ...foreign.map(({ moduleName, moduleCore }) =>
+      [ `seen by "${display(moduleName)}"`, display(moduleCore.version), display(moduleCore.root, PATH_LIMIT) ] as [ string, string, string ]),
+  ];
+  const labelWidth = Math.max(...rows.map(([ label ]) => label.length));
+  const versionWidth = Math.max(...rows.map(([ , version ]) => version.length));
+
+  const versions = [ ...new Set(foreign.map(({ moduleCore }) => moduleCore.version)) ];
+
+  // Only offer a pin when there IS one. Three modules pinning three different
+  // versions cannot be reconciled by any consumer-side pin, and naming one of
+  // them anyway is advice that does not work. The message this one replaces
+  // was wrong for exactly that reason — it asserted more than it knew.
+  //
+  // AND only when that pin is not ALREADY IN EFFECT. Same version at two roots
+  // is a duplicate INSTALL, not a version conflict — the shape
+  // `npm install -g stonyx` plus `stonyx new` produces, and the one the docs
+  // walk a consumer through — so telling them to pin the version their running
+  // core already IS, is advice that has demonstrably just failed. That is the
+  // same "asserts more than it knows" defect the whole message replaces.
+  const consumerRemedy = versions.length !== 1
+    ? 'There is no consumer-side pin that fixes this: the modules disagree among themselves ' +
+      `(${versions.map(version => display(version)).join(', ')}). They must be republished with the peer shape above.`
+    : versions[0] === first.runningCore.version
+      ? `Fix (this app, meanwhile): every copy on disk is already stonyx@${display(versions[0])}, so this is a duplicate ` +
+        'INSTALL and not a version conflict — no pin can merge them. Run one core: invoke the CLI from this app\'s own ' +
+        'node_modules/.bin/stonyx rather than a global install, and remove the redundant copy listed above.'
+      : `Fix (this app, meanwhile): pin stonyx@${display(versions[0])} so every copy dedupes to one.`;
+
+  return [
+    `Stonyx: ${copies} copies of the framework are installed and this app cannot be served.`,
+    '',
+    ...rows.map(([ label, version, root ]) => `  ${label.padEnd(labelWidth)}  ${version.padEnd(versionWidth)}  ${root}`),
+    '',
+    `Config, logging and lifecycle hooks are registered on the running core. ${names} ` +
+    `${single ? 'imports' : 'import'} a different copy, so for ${single ? 'it' : 'them'} \`Stonyx.config\` is empty, ` +
+    `\`Stonyx.log\` throws "Stonyx has not been initialized yet", and ${single ? 'its' : 'their'} ` +
+    'startup and shutdown hooks never fire.',
+    '',
+    `Fix (module author): ${names} must declare stonyx in devDependencies plus a non-optional ` +
+    'peerDependencies range, never as an exact dependency — @stonyx/discord is the reference shape. ' +
+    consumerRemedy,
+    '',
+    'Scope of this check: it compares physical package ROOTS only. It does not check that the ' +
+    'single surviving copy is a compatible version, and it looks at @stonyx/* packages declared in ' +
+    'this app\'s devDependencies that carry the "stonyx-module" keyword — nothing else. A copy ' +
+    'dragged in by anything outside that set, including an @stonyx/* package declared in ' +
+    'dependencies rather than devDependencies, is not counted.',
+  ].join('\n');
+}

@@ -125,6 +125,27 @@ function realPath(path: string): string {
 /**
  * The path a refusal names, or `null` when no path can be extracted from it.
  *
+ * `fileURLToPath` is contained for the same reason `realPath` is: this runs
+ * INSIDE `importConfig`'s catch handler, so anything it throws replaces the
+ * refusal being handled and takes its `cause` with it — the exact loss
+ * invariant I2 exists to prevent. Regex-matchable inputs that throw exist and
+ * were measured at this head: `file:///a%2Fb.ts` -> `ERR_INVALID_FILE_URL_PATH`,
+ * `file:///%.ts` and `file:///a%zz.ts` -> bare `URIError: URI malformed`.
+ *
+ * Node's own emissions never produce them — `pathToFileURL` percent-encodes a
+ * literal `%` and never emits a bare `%2F` for a POSIX filename — but the
+ * message is only USUALLY Node's. `refusalIsAboutTheConfig` is exported public
+ * API with no input validation, and a `register()` / `--import` loader hook
+ * (this suite itself runs under `tsx`) can throw `ERR_UNKNOWN_FILE_EXTENSION`
+ * with any message it likes. Driven end-to-end through `dist/` with such a
+ * hook before this containment, the consumer got `ERR_INVALID_FILE_URL_PATH:
+ * File URL path must not include encoded / characters` with `cause` undefined,
+ * and the refusal it was actually handling was gone.
+ *
+ * An unparseable URL returns `null`, which the predicate reads as "cannot
+ * tell" -> `false` -> the original error propagates untouched. Same fail
+ * direction as every other unknown in here.
+ *
  * Quoted shape first: it is the more specific of the two. Measured at this
  * head the order is an EQUIVALENT mutant — swapping it leaves the suite at
  * 130/0, because neither measured message shape matches both patterns — so the
@@ -136,7 +157,13 @@ function refusedPathFrom(message: string): string | null {
 
   if (!refused) return null;
 
-  return refused.startsWith('file://') ? fileURLToPath(refused) : refused;
+  if (!refused.startsWith('file://')) return refused;
+
+  try {
+    return fileURLToPath(refused);
+  } catch {
+    return null;
+  }
 }
 
 /**

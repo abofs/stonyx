@@ -270,6 +270,21 @@ module('[Unit] refusalIsAboutTheConfig', function() {
     );
   });
 
+  // F-8. `fileURLToPath` runs inside `importConfig`'s catch handler, so a
+  // throw here replaces the refusal being handled and discards its `cause` --
+  // the exact loss invariant I2 exists to prevent. These three are
+  // regex-matchable and all three threw before the containment: `%2F` ->
+  // ERR_INVALID_FILE_URL_PATH, the other two -> bare `URIError: URI malformed`.
+  // Node never emits them; a `register()` loader hook can, and the predicate
+  // is exported public API with no input validation.
+  test('false, not a throw, when the file:// URL cannot be decoded', function(assert) {
+    for (const bad of [ 'file:///a%2Fb.ts', 'file:///%.ts', 'file:///a%zz.ts' ]) {
+      assert.false(refusalIsAboutTheConfig(
+        `Unknown file extension ".ts" for "${bad}"`, configPath
+      ), `${bad} must return a verdict, not escape the predicate`);
+    }
+  });
+
   // Pins the leading-context class `(?:^|\s)`. Without it the bare pattern
   // starts at the first `/` anywhere in the message, so a RELATIVE path is
   // promoted to an absolute one — and this message's absolute suffix is

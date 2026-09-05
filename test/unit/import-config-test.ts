@@ -346,6 +346,96 @@ module('[Unit] importConfig', function(hooks) {
       'and does not name the config, which loaded fine'
     );
   });
+
+  // ---------------------------------------------------------------------
+  // T13 — F-4. The `sibling` clause: both files present AND the `.ts` refused.
+  //
+  // It had ZERO coverage. Replacing the whole clause with `''` left the suite
+  // at 113 pass / 0 fail, so nothing observed the branch at all.
+  //
+  // It is reachable: plain node, both files under `node_modules`. And it is a
+  // deliberate BEHAVIOUR CHANGE. Measured against the pre-#105 loader
+  // (`${basePath}.js` unconditionally — `git show dev:src/util/import-config.ts`)
+  // on this same fixture under plain node, it returned `{ source: 'js' }` and
+  // booted. At this head it is a hard failure. The population most likely to
+  // hold both files is the one that worked around #105 by renaming to `.js`
+  // while the postinstall kept writing the `.ts` stub, so this is not a
+  // theoretical state.
+  //
+  // The clause also contradicted its neighbour: the both-present `console.warn`
+  // on the SAME call says "delete the .js", and here the `.js` is the only file
+  // this runtime can read. Both messages are asserted together below, because
+  // the defect was in their RELATIONSHIP, not in either one alone.
+  test('names the opposite remedy to the both-present warning when the .ts is refused', async function(assert) {
+    const modConfigDir = join(dir, 'node_modules', 'f4-both', 'config');
+    mkdirSync(modConfigDir, { recursive: true });
+    writeFileSync(
+      join(modConfigDir, 'environment.ts'),
+      `const config: { source: string } = { source: 'ts' };\nexport default config;\n`
+    );
+    writeFileSync(join(modConfigDir, 'environment.js'), `export default { source: 'js' };\n`);
+
+    const configBase = join(modConfigDir, 'environment');
+    const result = await importConfigInPlainNode(configBase);
+
+    // Premise: the pre-#105 loader LOADED this state. If it did not, the
+    // "behaviour change" framing below would be wrong.
+    assert.notOk(result.ok, 'premise: at this head the state is a hard failure');
+    assert.ok(
+      result.message?.startsWith(CONFIG_NOT_LOADABLE_PREFIX),
+      `reported as present-but-not-loadable, got: ${result.message}`
+    );
+
+    // The warning fired on the same call, and it says delete the .js.
+    assert.strictEqual(result.warnings.length, 1, 'the both-present warning fired on this same call');
+    assert.ok(
+      result.warnings[0]?.includes('delete the .js'),
+      `premise for the contradiction: the warning does say "delete the .js", got: ${result.warnings[0]}`
+    );
+
+    // ...so the error must explicitly overrule it, or the consumer gets two
+    // instructions and the wrong one is the louder, friendlier-looking one.
+    assert.ok(
+      result.message?.includes('Disregard the "delete the .js" warning above'),
+      `the error overrules the warning by name, got: ${result.message}`
+    );
+    assert.ok(
+      result.message?.includes(`remove or compile ${configBase}.ts`),
+      'and names the opposite remedy: remove the .ts, not the .js'
+    );
+    assert.ok(
+      result.message?.includes('this runtime CAN read it'),
+      'and says the .js is readable, which is why "delete the .js" would make it worse'
+    );
+    assert.ok(
+      result.message?.includes('beta.95 loaded the .js here'),
+      'and discloses that this state used to boot — the change is deliberate, not a surprise'
+    );
+  });
+
+  // T14 — the control for T13's `sibling` half. SAME refused `.ts`, no `.js`
+  // beside it. The clause must NOT fire: there is no sibling to disregard a
+  // warning about, and no warning was printed. Without this, T13 is consistent
+  // with the clause being appended unconditionally.
+  test('does not mention a sibling .js when there is no sibling .js', async function(assert) {
+    const modConfigDir = join(dir, 'node_modules', 'f4-only-ts', 'config');
+    mkdirSync(modConfigDir, { recursive: true });
+    writeFileSync(
+      join(modConfigDir, 'environment.ts'),
+      `const config: { source: string } = { source: 'ts' };\nexport default config;\n`
+    );
+
+    const result = await importConfigInPlainNode(join(modConfigDir, 'environment'));
+
+    assert.notOk(result.ok, 'premise: still a hard failure');
+    assert.ok(result.message?.startsWith(CONFIG_NOT_LOADABLE_PREFIX), 'still present-but-not-loadable');
+    assert.strictEqual(result.warnings.length, 0, 'no both-present warning, because there is no both');
+    assert.notOk(
+      result.message?.includes('Disregard the "delete the .js" warning above'),
+      `no sibling clause, got: ${result.message}`
+    );
+    assert.notOk(result.message?.includes('also exists and this runtime CAN read it'), 'no sibling clause');
+  });
 });
 
 /**

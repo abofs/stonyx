@@ -154,13 +154,30 @@ export async function importConfig<T = unknown>(basePath: string): Promise<T> {
     const code = (error as { code?: string } | undefined)?.code;
 
     if (code && FILE_TYPE_REFUSAL_CODES.has(code) && refusalIsAboutTheConfig((error as Error).message, path)) {
+      // Both files exist AND the `.ts` was refused. This is the one state where
+      // the both-present warning printed a few lines above is actively wrong
+      // advice: it says "delete the .js", and here the `.js` is the only file
+      // this runtime can read. Say so explicitly rather than leaving the
+      // consumer to reconcile two messages from the same call.
+      //
+      // It is also a deliberate behaviour change. `stonyx@0.2.3-beta.95`
+      // resolved `${basePath}.js` unconditionally, so this exact state LOADED
+      // and booted; measured against that loader, same fixture, plain node:
+      // it returned the `.js` default export with no warning. Preferring `.ts`
+      // is the point of #105, and the population most likely to hold both
+      // files is the one that worked around #105 by renaming to `.js` while
+      // the postinstall kept writing the `.ts` stub. So this message has to
+      // carry the "this used to work" fact, not just the remedy.
       const sibling = matches.length > 1
-        ? ` A ${basePath}.js also exists; .ts wins by design, so this is not resolved by leaving the .js in place.`
+        ? ` ${basePath}.js also exists and this runtime CAN read it, but .ts wins the preference order` +
+          ` so the .js is never reached. Disregard the "delete the .js" warning above — in THIS state the` +
+          ` fix is the opposite one: remove or compile ${basePath}.ts.` +
+          ` (stonyx@0.2.3-beta.95 loaded the .js here; preferring .ts is a deliberate change — abofs/stonyx#105.)`
         : '';
 
       throw new Error(
         `${CONFIG_NOT_LOADABLE_PREFIX} ${path} exists, but this Node runtime refused to load it ` +
-        `(${code}): ${(error as Error).message}${sibling}`,
+        `(${code}): ${(error as Error).message}.${sibling}`,
         { cause: error }
       );
     }

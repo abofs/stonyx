@@ -23,6 +23,8 @@ export default {
 
 Stonyx resolves the config by trying `.ts` first, then falling back to `.js`. If both are present `.ts` wins and a warning is logged — the `.js` is almost always a stale compiled artifact or postinstall stub and should be removed.
 
+> **Behaviour change (abofs/stonyx#105).** Before this fix the loader resolved `config/environment.js` unconditionally, so a project holding **both** files loaded the `.js`. It now loads the `.ts`. If that `.ts` is one this runtime cannot read — the only common case is a `.ts` under `node_modules`, which Node refuses to type-strip — a state that previously booted is now a hard failure, and the error says so and tells you to remove the `.ts` rather than the `.js`. Measured, same fixture, plain node: pre-fix returned the `.js` export; at this version it throws `Config present but not loadable: …`.
+
 ### Postinstall template
 
 Stonyx ships two templates in its package — `config/environment copy.ts` and `config/environment copy.js` — and the postinstall script picks the one matching your project type:

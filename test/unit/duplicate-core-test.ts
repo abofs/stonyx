@@ -18,7 +18,7 @@
  */
 import QUnit from 'qunit';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -298,6 +298,99 @@ module('[Unit] duplicate-core detector', function(hooks) {
       null,
       'DEEP: a NODE_PATH store INSIDE the app, whose parent is a genuine ancestor, is not reported either'
     );
+  });
+
+  // D10 — the fail-opens are SILENT, which is the half of the disclosure that
+  // was never pinned. The fail DIRECTION is deliberate and stays: this guard
+  // converts a silent wrong state into a loud one and must not invent a boot
+  // failure out of an inconclusive probe. But all three sites were measured
+  // reachable, and each let a tree carrying a genuine second core boot clean
+  // and quiet while the control threw in the same run — so "we could not check"
+  // was indistinguishable from "we checked and it is fine".
+  //
+  // D3 pins the direction for two arms. This pins the SIGNAL, and covers the
+  // arm nothing covered: a nested manifest that exists and will not read.
+  test('D10: a nested manifest that exists but will not read fails open AND says so', function(assert) {
+    const rootPath = root({ name: 'd10-app' });
+    installModule(rootPath, '@stonyx/d10-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d10-mod');
+    const nested = installNestedCore(rootPath, '@stonyx/d10-mod', '0.0.0-nested');
+    const nestedManifest = join(nested, 'package.json');
+    const probe = (): { foreign: ForeignCore[]; reports: string[] } => {
+      const reports: string[] = [];
+      const foreign = findForeignCores([ { name: '@stonyx/d10-mod', dir: moduleDir } ], undefined, message => reports.push(message));
+
+      return { foreign, reports };
+    };
+
+    // CONTROL, same fixture, readable manifest: the second core IS reported and
+    // nothing is written. So a silent [] below is the fail-open, not an inert
+    // harness.
+    const control = probe();
+
+    assert.strictEqual(control.foreign.length, 1, 'control: with a readable manifest the second core is reported');
+    assert.deepEqual(control.reports, [], 'control: and nothing is reported as inconclusive');
+
+    writeFileSync(nestedManifest, '{ this is not json');
+
+    const corrupt = probe();
+
+    assert.deepEqual(corrupt.foreign, [], 'an unparseable nested manifest fails OPEN — no invented boot failure');
+    assert.strictEqual(corrupt.reports.length, 1, 'and is reported exactly once');
+    assert.ok(corrupt.reports[0]?.includes(nestedManifest), `naming the file it could not read, got: ${corrupt.reports[0]}`);
+    assert.ok(corrupt.reports[0]?.includes('SyntaxError'), 'and why');
+
+    writeFileSync(nestedManifest, JSON.stringify({ name: 'stonyx', version: '0.0.0-nested' }));
+    chmodSync(nestedManifest, 0o000);
+
+    let unreadable = true;
+
+    // Running as root defeats the mode bits entirely; assert the premise rather
+    // than assert nothing.
+    try {
+      accessSync(nestedManifest, constants.R_OK);
+      unreadable = false;
+    } catch { /* expected */ }
+
+    if (unreadable) {
+      const denied = probe();
+
+      assert.deepEqual(denied.foreign, [], 'a chmod 000 nested manifest also fails OPEN');
+      assert.strictEqual(denied.reports.length, 1, 'and is reported');
+      assert.ok(denied.reports[0]?.includes('EACCES'), `naming the reason, got: ${denied.reports[0]}`);
+    } else {
+      assert.ok(true, 'premise absent: this process can read a chmod 000 file, so the EACCES arm is not observable here');
+      assert.ok(true, '');
+      assert.ok(true, '');
+    }
+
+    chmodSync(nestedManifest, 0o644);
+  });
+
+  // D11 — the second fail-open site, and the widest: no running core means no
+  // comparison and nothing checked at all. `owningCore` returning null is
+  // reachable in production by interposing a `package.json` above `dist/`,
+  // measured to boot a two-core tree clean and silent.
+  test('D11: an unidentifiable running core fails open AND says so', function(assert) {
+    const rootPath = root({ name: 'd11-app' });
+    installModule(rootPath, '@stonyx/d11-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+    installNestedCore(rootPath, '@stonyx/d11-mod', '0.0.0-nested');
+
+    const modules = [ { name: '@stonyx/d11-mod', dir: join(rootPath, 'node_modules', '@stonyx/d11-mod') } ];
+    const reports: string[] = [];
+
+    // CONTROL first: with a running core this exact tree IS reported.
+    assert.strictEqual(findForeignCores(modules, undefined, message => reports.push(message)).length, 1, 'control: the second core is reported when the running core is known');
+    assert.deepEqual(reports, [], 'control: and nothing is inconclusive');
+
+    const blind: string[] = [];
+
+    assert.deepEqual(findForeignCores(modules, null, message => blind.push(message)), [], 'with no running core nothing is reported as foreign');
+    assert.strictEqual(blind.length, 1, 'but the skipped pre-flight is announced');
+    assert.ok(blind[0]?.includes('could not identify itself'), `naming what went wrong, got: ${blind[0]}`);
   });
 
   // D4 — the message. #108 was filed because the OLD message named a file that

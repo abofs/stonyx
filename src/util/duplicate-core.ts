@@ -50,6 +50,26 @@ function realPath(path: string): string {
 }
 
 /**
+ * Told when the probe could not reach a conclusion.
+ *
+ * FAIL-OPEN IS THE POLICY; SILENCE IS NOT. `findForeignCores` must never invent
+ * a boot failure out of an inconclusive probe — but "we could not check" has to
+ * be distinguishable from "we checked and it is fine", because the states that
+ * fail open are exactly the states in which a genuine second core is present
+ * and unreported. Measured on trees that DO carry a second core, each of these
+ * boots clean and silent while the control throws in the same run:
+ *
+ *   - an interposed `dist/package.json`, so the running core cannot name itself
+ *   - a nested `stonyx/package.json` that is not valid JSON
+ *   - the same file at `chmod 000`
+ *
+ * A reporter can only write a line. It cannot change the outcome.
+ */
+export type InconclusiveReporter = (message: string) => void;
+
+const IGNORE: InconclusiveReporter = () => {};
+
+/**
  * True exactly for the directories Node's own bare-specifier walk emits.
  *
  * `require.resolve.paths(x)` returns the walk FOLLOWED BY the CJS global
@@ -95,19 +115,43 @@ export function isWalkEntry(candidate: string, moduleDir: string): boolean {
   return moduleDir === owner || moduleDir.startsWith(owner.endsWith(sep) ? owner : owner + sep);
 }
 
-function readPackageJson(dir: string): Record<string, unknown> | null {
+/**
+ * `null` when nothing is there — the ordinary case while walking up.
+ *
+ * A manifest that EXISTS but will not read or parse is a different state, and
+ * it is the fail-open site that had neither a signal nor a test. ENOENT and
+ * ENOTDIR mean "no package here"; anything else — EACCES from a `chmod 000`, or
+ * a SyntaxError from a corrupt manifest, which carries no `code` at all — means
+ * a package root was found and could not be inspected.
+ */
+function readPackageJson(dir: string, report: InconclusiveReporter = IGNORE): Record<string, unknown> | null {
+  const file = join(dir, 'package.json');
+
   try {
-    return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as Record<string, unknown>;
-  } catch {
+    return JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      report(
+        `Stonyx: ${file} exists but could not be read as JSON (${code ?? (error as Error)?.name ?? 'unknown error'}), ` +
+        'so it was not checked for a duplicate framework core.'
+      );
+    }
+
     return null;
   }
 }
 
-function asCore(dir: string): CorePackage | null {
-  const pkg = readPackageJson(dir);
+function asCore(dir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
+  const pkg = readPackageJson(dir, report);
 
   if (!pkg || pkg.name !== 'stonyx') return null;
 
+  // A manifest with no string `version` is malformed, not absent. `'unknown'`
+  // keeps the row in the table: dropping the whole core because one field is
+  // missing would silently un-detect a real duplicate, which is the failure
+  // mode this file exists to remove.
   return { root: realPath(dir), version: typeof pkg.version === 'string' ? pkg.version : 'unknown' };
 }
 
@@ -121,13 +165,13 @@ function asCore(dir: string): CorePackage | null {
  * ancestor — inside this repo's own worktree, that ancestor is the repo root,
  * which IS named `stonyx`. That would make every fixture look like a match.
  */
-function owningCore(startDir: string): CorePackage | null {
+function owningCore(startDir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
   let dir = realPath(startDir);
 
   for (;;) {
-    const pkg = readPackageJson(dir);
+    const pkg = readPackageJson(dir, report);
 
-    if (pkg) return pkg.name === 'stonyx' ? asCore(dir) : null;
+    if (pkg) return pkg.name === 'stonyx' ? asCore(dir, report) : null;
 
     const parent = dirname(dir);
 
@@ -138,8 +182,8 @@ function owningCore(startDir: string): CorePackage | null {
 }
 
 /** The `stonyx` copy that is executing this code. */
-export function runningCore(): CorePackage | null {
-  return owningCore(dirname(fileURLToPath(import.meta.url)));
+export function runningCore(report: InconclusiveReporter = IGNORE): CorePackage | null {
+  return owningCore(dirname(fileURLToPath(import.meta.url)), report);
 }
 
 /**
@@ -164,16 +208,17 @@ export function runningCore(): CorePackage | null {
  *    why the predicate is what it is and what the previous one got wrong.
  *
  * Returns `null` when no copy is reachable at all — "cannot tell", handled as
- * not-a-duplicate by `findForeignCores`.
+ * not-a-duplicate by `findForeignCores`. Manifests that exist but will not read
+ * go to `report`; see `InconclusiveReporter`.
  */
-export function coreSeenBy(moduleDir: string): CorePackage | null {
+export function coreSeenBy(moduleDir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
   const resolvedModuleDir = realPath(moduleDir);
   const candidates = createRequire(join(resolvedModuleDir, 'package.json')).resolve.paths('stonyx') ?? [];
 
   for (const nodeModulesDir of candidates) {
     if (!isWalkEntry(nodeModulesDir, resolvedModuleDir)) continue;
 
-    const core = asCore(join(nodeModulesDir, 'stonyx'));
+    const core = asCore(join(nodeModulesDir, 'stonyx'), report);
 
     if (core) return core;
   }
@@ -191,17 +236,34 @@ export function coreSeenBy(moduleDir: string): CorePackage | null {
  * an inconclusive probe. Every state it does report has two package roots in
  * hand and has compared them.
  */
-export function findForeignCores(modules: { name: string; dir: string }[], core = runningCore()): ForeignCore[] {
-  if (!core) return [];
+export function findForeignCores(
+  modules: { name: string; dir: string }[],
+  core: CorePackage | null | undefined = undefined,
+  report: InconclusiveReporter = IGNORE
+): ForeignCore[] {
+  const resolved = core === undefined ? runningCore(report) : core;
+
+  // The first fail-open, and the one with the widest blast radius: no core, no
+  // comparison, nothing checked at all. Reported here rather than inside
+  // `runningCore` so the same line is emitted however the caller arrived at it.
+  if (!resolved) {
+    report('Stonyx: the running framework core could not identify itself, so the duplicate-core pre-flight was skipped and a second core would not be reported.');
+
+    return [];
+  }
 
   const foreign: ForeignCore[] = [];
 
   for (const { name, dir } of modules) {
-    const moduleCore = coreSeenBy(dir);
+    const moduleCore = coreSeenBy(dir, report);
 
-    if (!moduleCore || moduleCore.root === core.root) continue;
+    // A module that resolves NO core is not an inconclusive probe and is not
+    // reported: `coreSeenBy` walks exactly what the module would import, so
+    // "nothing found" means there is no second copy on that path to hide. The
+    // two states that CAN hide one report from where they occur.
+    if (!moduleCore || moduleCore.root === resolved.root) continue;
 
-    foreign.push({ moduleName: name, moduleCore, runningCore: core });
+    foreign.push({ moduleName: name, moduleCore, runningCore: resolved });
   }
 
   return foreign;

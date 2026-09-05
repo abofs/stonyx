@@ -137,8 +137,14 @@ export default async function loadModules(
   // imported, because the point of the check is the module that would NOT
   // throw — it would load, initialise, and register its hooks on a second
   // singleton that nobody started. See src/util/duplicate-core.ts.
+  //
+  // `console.warn` for the inconclusive probes: fail-open is the policy, but
+  // "we could not check" must be distinguishable from "we checked and it is
+  // fine". This is the file's existing idiom for a non-fatal loader advisory.
   const foreignCores = findForeignCores(
-    moduleDependencies.map(moduleName => ({ name: moduleName, dir: `${rootPath}/node_modules/${moduleName}` }))
+    moduleDependencies.map(moduleName => ({ name: moduleName, dir: `${rootPath}/node_modules/${moduleName}` })),
+    undefined,
+    message => console.warn(message)
   );
 
   if (foreignCores.length > 0) throw new Error(duplicateCoreMessage(foreignCores));

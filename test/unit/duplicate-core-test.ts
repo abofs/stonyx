@@ -267,6 +267,38 @@ module('[Unit] duplicate-core detector', function(hooks) {
     assert.ok(message.includes('Scope of this check'), 'and states what it does NOT cover');
     assert.notOk(message.includes('config/environment'), 'and never mentions config/environment — that was the false claim');
   });
+
+  // D9 — the copy COUNT and the pin advice, both found wrong by running the
+  // check against a real `stonyx new` tree rather than a fixture.
+  //
+  // `foreign.length + 1` was right on that tree by coincidence (three modules,
+  // three different copies) and is wrong whenever two modules share one nested
+  // copy — which is the commonest npm shape, since siblings on the same exact
+  // pin dedupe with each other. And "pin stonyx@<first foreign version>" is
+  // advice that cannot work when the modules disagree among themselves; the
+  // message this one replaces was wrong for exactly that reason, so it must
+  // not assert more than it knows.
+  test('D9: counts DISTINCT roots, and only offers a pin when one version could satisfy every module', function(assert) {
+    const runningCore = { root: '/app/node_modules/stonyx', version: '0.2.3-beta.96' };
+    const shared = { root: '/app/node_modules/.pnpm/stonyx@0.2.3-beta.94/node_modules/stonyx', version: '0.2.3-beta.94' };
+
+    const agreeing = duplicateCoreMessage([
+      { moduleName: '@stonyx/cron', moduleCore: shared, runningCore },
+      { moduleName: '@stonyx/orm', moduleCore: shared, runningCore },
+    ]);
+
+    assert.ok(agreeing.startsWith('Stonyx: 2 copies'), `two modules on one copy is TWO copies, got: ${agreeing.split('\n')[0]}`);
+    assert.ok(agreeing.includes('pin stonyx@0.2.3-beta.94'), 'and one pin does reconcile them');
+
+    const disagreeing = duplicateCoreMessage([
+      { moduleName: '@stonyx/cron', moduleCore: shared, runningCore },
+      { moduleName: '@stonyx/sockets', moduleCore: { root: '/app/node_modules/.pnpm/stonyx@0.2.3-beta.62/node_modules/stonyx', version: '0.2.3-beta.62' }, runningCore },
+    ]);
+
+    assert.ok(disagreeing.startsWith('Stonyx: 3 copies'), `three distinct roots is THREE copies, got: ${disagreeing.split('\n')[0]}`);
+    assert.notOk(disagreeing.includes('pin stonyx@'), 'and no pin is offered, because none would work');
+    assert.ok(disagreeing.includes('must be republished'), 'the remedy names what would actually fix it');
+  });
 });
 
 module('[Unit] loadModules pre-flight', function(hooks) {

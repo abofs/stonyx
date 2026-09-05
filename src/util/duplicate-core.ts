@@ -182,21 +182,39 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
 
   if (!first) throw new Error('duplicateCoreMessage called with no foreign cores');
 
-  const rows = [
-    `  running core${' '.repeat(Math.max(1, 24 - 'running core'.length))}${first.runningCore.version}  ${first.runningCore.root}`,
-    ...foreign.map(({ moduleName, moduleCore }) => {
-      const label = `seen by "${moduleName}"`;
-      return `  ${label}${' '.repeat(Math.max(1, 24 - label.length))}${moduleCore.version}  ${moduleCore.root}`;
-    }),
-  ];
-
   const names = foreign.map(({ moduleName }) => `"${moduleName}"`).join(', ');
-  const pins = [ ...new Set(foreign.map(({ moduleCore }) => moduleCore.version)) ];
+
+  // DISTINCT roots, not `foreign.length + 1`. Two modules that both resolve
+  // the SAME nested copy are two rows and two copies, not three. Found by
+  // running this against a real `stonyx new` tree: there the naive count was
+  // right by coincidence (three modules, three different copies), and it is
+  // wrong for the commonest npm shape, where siblings on one exact pin dedupe
+  // with each other.
+  const copies = new Set([ first.runningCore.root, ...foreign.map(({ moduleCore }) => moduleCore.root) ]).size;
+
+  const rows: [ string, string, string ][] = [
+    [ 'running core', first.runningCore.version, first.runningCore.root ],
+    ...foreign.map(({ moduleName, moduleCore }) =>
+      [ `seen by "${moduleName}"`, moduleCore.version, moduleCore.root ] as [ string, string, string ]),
+  ];
+  const labelWidth = Math.max(...rows.map(([ label ]) => label.length));
+  const versionWidth = Math.max(...rows.map(([ , version ]) => version.length));
+
+  const versions = [ ...new Set(foreign.map(({ moduleCore }) => moduleCore.version)) ];
+
+  // Only offer a pin when there IS one. Three modules pinning three different
+  // versions cannot be reconciled by any consumer-side pin, and naming one of
+  // them anyway is advice that does not work. The message this one replaces
+  // was wrong for exactly that reason — it asserted more than it knew.
+  const consumerRemedy = versions.length === 1
+    ? `Fix (this app, meanwhile): pin stonyx@${versions[0]} so every copy dedupes to one.`
+    : 'There is no consumer-side pin that fixes this: the modules disagree among themselves ' +
+      `(${versions.join(', ')}). They must be republished with the peer shape above.`;
 
   return [
-    `Stonyx: ${foreign.length + 1} copies of the framework are installed and this app cannot be served.`,
+    `Stonyx: ${copies} copies of the framework are installed and this app cannot be served.`,
     '',
-    ...rows,
+    ...rows.map(([ label, version, root ]) => `  ${label.padEnd(labelWidth)}  ${version.padEnd(versionWidth)}  ${root}`),
     '',
     `Config, logging and lifecycle hooks are registered on the running core. ${names} ` +
     'import a different copy, so for them `Stonyx.config` is empty, `Stonyx.log` throws ' +
@@ -204,7 +222,7 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
     '',
     `Fix (module author): ${names} must declare stonyx in devDependencies plus a non-optional ` +
     'peerDependencies range, never as an exact dependency — @stonyx/discord is the reference shape. ' +
-    `Fix (this app, meanwhile): pin stonyx@${pins[0]} so every copy dedupes to one.`,
+    consumerRemedy,
     '',
     'Scope of this check: it compares physical package ROOTS only. It does not check that the ' +
     'single surviving copy is a compatible version, and it cannot see a copy dragged in by a ' +

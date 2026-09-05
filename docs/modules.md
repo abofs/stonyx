@@ -42,9 +42,18 @@ core's release line, so the whole set stays on one line:
 }
 ```
 
-> Read [Version alignment](#version-alignment) before you add modules. As of
-> 2026-09-05 the published modules still pull in their own copy of the core, and a
-> project that installs them will not boot.
+> Read [Version alignment](#version-alignment) before you add modules. A module that
+> declares its own `stonyx` at a version other than yours puts a second core in the
+> tree; whether that is loud or silent is decided by the module's `stonyx-async`
+> keyword, not by luck.
+>
+> Measured 2026-09-05 against an application pinning `stonyx@0.2.3-beta.96`, one
+> module at a time: every module at `@beta` resolved exactly **one** core, and
+> `@stonyx/cron`, `@stonyx/discord`, `@stonyx/events`, `@stonyx/rest-server` and
+> `@stonyx/sockets` booted. `@stonyx/orm@0.3.2-beta.249` and
+> `@stonyx/oauth@0.1.1-beta.197` exit 1, but on an unsatisfied *sibling* module
+> (`@stonyx/rest-server`), not on a duplicate core — see abofs/stonyx-orm#291. The
+> module `beta` tags move several times a day, so count rather than assume.
 
 ### Why not `latest`
 
@@ -55,7 +64,9 @@ Measured 2026-09-05:
   its own `"serve": "stonyx serve"` script has no binary to run.
 - Each module's `latest` tag points at a release that pins an older core:
   `@stonyx/sockets@latest` (`0.1.0`) pins `stonyx@0.2.3-beta.6`, and
-  `@stonyx/orm@latest` (`0.3.1`) reaches `stonyx@0.2.3-beta.11` through `@stonyx/cron`.
+  `@stonyx/orm@latest` (`0.3.1`) declares `stonyx@0.2.3-beta.11` directly in its own
+  `dependencies` (its `@stonyx/cron@0.2.1-beta.29` pins the same core, but that is an
+  additional path, not the route).
 
 A manifest asking for `latest` for the core plus `@stonyx/rest-server`,
 `@stonyx/sockets` and `@stonyx/orm` resolved to **three** distinct cores — `0.2.2`,
@@ -115,26 +126,57 @@ store entries `pnpm` leaves behind from an earlier install — measured reportin
 versions in a project that resolves exactly one. `pnpm why` walks the resolved graph
 and does not.
 
-**And do not wait for an error.** Two cores produce either outcome, both measured on
-2026-09-05 in a two-file consumer:
+**And do not wait for an error.** Whether a second core is loud or silent is
+deterministic, and it follows the module's `stonyx-async` keyword. `loadModules`
+skips the import entirely for a module without it:
 
-- **Loud.** With `@stonyx/sockets`, `stonyx serve` exits 1 with
-  `Error: Stonyx has not been initialized yet`, thrown from the *module's* copy of the
-  core under `node_modules/.pnpm/stonyx@0.2.3-beta.62/`, then relabelled as
+```js
+if (!keywords.includes('stonyx-async')) {
+  modulePromises[moduleName].resolve();
+  continue;
+}
+```
+
+- A **sync** module (`keywords: ["stonyx-module"]`) is never imported, so its copy of
+  the core is never loaded and never complains. **Always silent.**
+- An **async** module (`keywords: ["stonyx-async", "stonyx-module"]`) is imported, and
+  its `config/environment.js` evaluates against *its own* copy of the core, which
+  nothing initialised. **Always loud** — `stonyx serve` exits 1 with
+  `Error: Stonyx has not been initialized yet`, thrown from the module's copy under
+  `node_modules/.pnpm/stonyx@<the module's pin>/`, relabelled as
   `Stonyx modules with async loading must have a config/environment.js file with
-  default configurations. Module "@stonyx/sockets" failed to load.` The config file
-  that second message points at is present and correct — the message is wrong about
-  the cause (see abofs/stonyx#108).
-- **Silent.** With `@stonyx/cron`, the same two-core tree booted, printed the app's
-  log line and exited 0, with no warning of any kind.
+  default configurations. Module "<name>" failed to load.` The config file that second
+  message points at is present and correct — the message is wrong about the cause (see
+  abofs/stonyx#108).
+
+Measured 2026-09-05 in a two-file consumer pinning `stonyx@0.2.3-beta.96`. Module
+versions are given resolved rather than as `@beta`, because the `beta` tags move
+several times a day and both of these examples stopped reproducing at `@beta` within a
+day of being written:
+
+| module, resolved | keywords | cores | `stonyx serve` |
+|---|---|---|---|
+| `@stonyx/cron@0.2.1-beta.131` (pins `0.2.3-beta.95`) | `stonyx-module` | 2 | booted, exit **0**, no warning |
+| `@stonyx/sockets@0.1.1-beta.48` (pins `0.2.3-beta.62`) | `stonyx-async`, `stonyx-module` | 2 | exit **1** |
+
+The keyword is the only variable, verified in both directions on those same two trees:
+deleting `stonyx-async` from the installed `@stonyx/sockets@0.1.1-beta.48` makes its
+two-core tree boot and exit 0, and adding `stonyx-async` to the installed
+`@stonyx/cron@0.2.1-beta.131` makes its two-core tree exit 1.
 
 Absence of an error is not evidence of a single core. Count.
 
 > **Known issue (2026-09-05).** Five modules — `@stonyx/cron`, `@stonyx/oauth`,
 > `@stonyx/orm`, `@stonyx/rest-server` and `@stonyx/sockets` — declare `stonyx` in
-> their own `dependencies` at an exact version, so installing any of them today adds a
-> core copy no matter what the application declares. `@stonyx/discord` is the one
-> module with the correct shape (see
+> their own `dependencies` at an exact version rather than `devDependencies` plus a
+> peer range. Whether that adds a second core depends entirely on what the application
+> declares: a module pin equal to the application's core dedupes to one, and a pin at
+> any other version does not. Measured 2026-09-05, all five resolved
+> `stonyx@0.2.3-beta.96` on their `beta` tag and deduped onto an application pinning
+> the same, while `@stonyx/sockets@0.1.1-beta.48` — the `beta` tag the day before —
+> pinned `0.2.3-beta.62` and resolved two. The declaration is still wrong: it makes
+> deduping a coincidence of release timing rather than a property of the manifest.
+> `@stonyx/discord` is the one module with the correct shape (see
 > [Framework Modules](conventions/framework-modules.md#a-module-never-declares-stonyx-in-dependencies)).
 > Tracked in abofs/stonyx#108 and abofs/stonyx#106; the fix is in the modules, not in
 > your application.

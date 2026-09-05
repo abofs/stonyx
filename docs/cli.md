@@ -29,10 +29,18 @@ stonyx new my-app       # Creates my-app/ in the current directory
 Scaffolded projects are TypeScript-first: every consumer-authored source file is `.ts`, with a root `tsconfig.json`, and `tsx`/`typescript` in `devDependencies`.
 
 **`stonyx new` requires a TTY on stdin.** The module questions are interactive and
-there is no non-interactive mode. With stdin piped or closed it exits before creating
-anything, with `Error: Interactive confirm() requires a TTY on stdin.` Automated
-harnesses must drive it under a pty (for example `expect`); a `--yes` / `--modules=`
-flag is tracked in abofs/stonyx#113.
+there is no non-interactive mode. With stdin piped or closed it exits 1 before creating
+anything (measured 2026-09-05: `$PWD` empty afterwards, both `< /dev/null` and piped),
+with the full message
+
+```
+Error: Interactive confirm() requires a TTY on stdin. For headless/container deployments, use the autoMigrate config option instead.
+```
+
+The second sentence comes from `@stonyx/utils`' shared `confirm()` and **does not apply
+to `stonyx new`** — `autoMigrate` is an ORM option and there is no such escape here.
+Automated harnesses must drive the command under a pty (for example `expect`); a
+`--yes` / `--modules=` flag is not yet filed as its own issue.
 
 **What the generated manifest declares.** The core is written to `dependencies`,
 pinned to the exact version of the `stonyx` package that ran the command, and every

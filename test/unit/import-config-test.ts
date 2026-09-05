@@ -48,7 +48,6 @@ import {
   CONFIG_NOT_FOUND_PREFIX,
   CONFIG_NOT_LOADABLE_PREFIX,
 } from '../../src/util/import-config.js';
-import { captureConsole } from '../helpers/module-fixture.js';
 
 const { module, test } = QUnit;
 
@@ -73,6 +72,7 @@ interface PlainNodeResult {
   value: unknown;
   message: string | null;
   causeCode: string | null;
+  warnings: string[];
 }
 
 /** Drives `dist/util/import-config.js` under plain node — no tsx. */
@@ -143,24 +143,24 @@ module('[Unit] importConfig', function(hooks) {
   });
 
   // T3 — AC1-b. `.ts` wins when both exist, and the ambiguity is warned about.
-  // `docs/configuration.md:24` documents exactly this. Dies if the order of
-  // LOADABLE_EXTENSIONS is swapped, or if the warning is dropped.
-  test('prefers .ts over .js when both exist, and warns', async function(assert) {
+  // `docs/configuration.md:24` documents exactly this.
+  //
+  // Runs under PLAIN node, and this is not optional. Written in-process it
+  // MEASURABLY does not guard: tsx resolves an `import()` of `environment.js`
+  // to the sibling `environment.ts`, so it returns `{source:'ts'}` whichever
+  // extension the loader chose. A mutation swapping LOADABLE_EXTENSIONS to
+  // `['js','ts']` was run against the in-process form and the ENTIRE suite
+  // stayed green — 108 pass / 0 fail. In this form the same mutation reds.
+  test('prefers .ts over .js when both exist, and warns (plain node — tsx cannot see this)', async function(assert) {
     writeFileSync(`${basePath}.ts`, `const config: { source: string } = { source: 'ts' };\nexport default config;\n`);
     writeFileSync(`${basePath}.js`, `export default { source: 'js' };\n`);
 
-    const captured = captureConsole();
-    let config: { source: string };
+    const result = await importConfigInPlainNode(basePath);
 
-    try {
-      config = await importConfig<{ source: string }>(basePath);
-    } finally {
-      captured.restore();
-    }
-
-    assert.equal(config.source, 'ts', '.ts wins when both are present');
-    assert.equal(captured.warnings.length, 1, 'exactly one warning');
-    assert.ok(captured.warnings[0]?.includes('Using .ts'), 'the warning names which file won');
+    assert.ok(result.ok, 'loads');
+    assert.deepEqual(result.value, { source: 'ts' }, '.ts wins when both are present');
+    assert.equal(result.warnings.length, 1, 'exactly one warning');
+    assert.ok(result.warnings[0]?.includes('Using .ts'), 'the warning names which file won');
   });
 
   // T4 — AC1-c / AC2-d (absent direction). Genuinely absent stays absent, and

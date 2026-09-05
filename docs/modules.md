@@ -44,8 +44,8 @@ core's release line, so the whole set stays on one line:
 
 > Read [Version alignment](#version-alignment) before you add modules. A module that
 > declares its own `stonyx` at a version other than yours puts a second core in the
-> tree; whether that is loud or silent is decided by the module's `stonyx-async`
-> keyword, not by luck.
+> tree, and `stonyx serve` refuses to start until there is one core — sync module or
+> async module, imported or not.
 >
 > Measured 2026-09-05 against an application pinning `stonyx@0.2.3-beta.96`, one
 > module at a time: every module at `@beta` resolved exactly **one** core, and
@@ -126,63 +126,74 @@ store entries `pnpm` leaves behind from an earlier install — measured reportin
 versions in a project that resolves exactly one. `pnpm why` walks the resolved graph
 and does not.
 
-**And do not wait for an error.** Whether a second core is loud or silent is
-deterministic, and it follows the module's `stonyx-async` keyword. `loadModules`
-skips the import entirely for a module without it:
+**And do not wait for an error — but as of abofs/stonyx#108 there will be one.**
+Before that change, whether a second core was loud or silent followed the module's
+`stonyx-async` keyword, because `loadModules` skips the import entirely for a module
+without it and an unimported copy never complains. That is no longer the mechanism.
 
-```js
-if (!keywords.includes('stonyx-async')) {
-  modulePromises[moduleName].resolve();
-  continue;
-}
+`loadModules` now runs a **pre-flight** before any module entry point is imported:
+every discovered `@stonyx/*` module carrying the `stonyx-module` keyword must resolve
+the same physical `stonyx` package root as the running core, or the boot is refused
+with a diagnostic naming every path and every version. The keyword still decides
+whether the module is *imported*; it no longer decides whether a duplicate core is
+noticed, because the pre-flight runs first and reads neither arm's keyword.
+
+Why the check had to move in front of the import: a sync module is never imported by
+the loader, so its second singleton was invisible — it loaded nothing, complained
+about nothing, and registered its hooks on a core nobody started only once the
+application's own code imported it. The failure it produced was real and arrived
+somewhere else entirely, which is what abofs/stonyx#108 was filed over.
+
+Re-measured 2026-09-05 at `fix/108-duplicate-core`, against `origin/dev` `8ca078f` as
+the control, in a hand-built two-file consumer pinning the core it ships. One fixture
+module, six trees, and **the only variables are the keyword set, the number of cores
+on disk, and whether `app.js` imports the module**. `stonyx serve` in each; exit code
+read from the process, not from a pipe tail:
+
+| module keywords | cores | `app.js` imports it | `dev` `8ca078f` | this branch |
+|---|---|---|---|---|
+| `stonyx-module` | 1 | no | `BOOT_OK`, exit **0** | `BOOT_OK`, exit **0** |
+| `stonyx-module` | 2 | no | `BOOT_OK`, exit **0**, no warning | exit **1**, duplicate-core refusal |
+| `stonyx-module` | 2 | yes | exit **1**, `Stonyx has not been initialized yet` | exit **1**, duplicate-core refusal |
+| `stonyx-module`, `stonyx-async` | 1 | no | `BOOT_OK`, exit **0** | `BOOT_OK`, exit **0** |
+| `stonyx-module`, `stonyx-async` | 2 | no | exit **1**, relabelled config message | exit **1**, duplicate-core refusal |
+| `stonyx-module`, `stonyx-async` | 2 | yes | exit **1**, relabelled config message | exit **1**, duplicate-core refusal |
+
+The one-core rows are the control: they boot on both, so the four refusals are the
+second core and not the harness.
+
+**Read the `dev` column for what the keyword used to buy, and the last column for what
+it buys now: nothing.** Every two-core row on this branch fails identically, from
+`loadModules`, before the module is imported:
+
+```
+Error: Stonyx: 2 copies of the framework are installed and this app cannot be served.
+
+  running core                  0.2.3-beta.97  <app>/node_modules/stonyx
+  seen by "@stonyx/<name>"      0.0.0-dup      <app>/node_modules/@stonyx/<name>/node_modules/stonyx
+
+Config, logging and lifecycle hooks are registered on the running core. "@stonyx/<name>"
+imports a different copy, so for it `Stonyx.config` is empty, `Stonyx.log` throws
+"Stonyx has not been initialized yet", and its startup and shutdown hooks never fire.
+    at loadModules (<app>/node_modules/stonyx/dist/modules.js)
 ```
 
-- A **sync** module (`keywords: ["stonyx-module"]`) is never imported *by the loader*,
-  so its copy of the core is never loaded there and never complains. **Silent through
-  module discovery — not silent for the application.** The gate above buys silence
-  from `loadModules`; it buys nothing the moment your own code imports the module.
-  Measured on the two-core `@stonyx/cron` tree below, with one line added to `app.js`
-  as the only variable:
+What the `dev` column shows, for anyone reading an older report: a sync module with a
+skewed pin booted clean and exited 0, and only turned into
+`Error: Stonyx has not been initialized yet` — thrown from the module's own copy of
+`dist/main.js`, arriving through the app-entry import and never through `loadModules`
+— once one line was added to `app.js`. An async module always exited 1, with its real
+cause written to stderr through a side channel and the thrown error relabelled
+`Stonyx modules with async loading must have a config/environment.js file with default
+configurations. Module "<name>" failed to load.` — a message wrong about both the file
+and the module. Both of those behaviours are gone; the message no longer exists.
 
-  ```js
-  import '@stonyx/cron';
-  ```
-
-  turns exit **0** into exit **1**, `Error: Stonyx has not been initialized yet`,
-  thrown from `.pnpm/stonyx@0.2.3-beta.95/…/dist/main.js:94` — cron's own pin — and
-  arriving through the app-entry import at
-  `.pnpm/stonyx@0.2.3-beta.96/…/dist/cli/serve.js:43`, never through `loadModules` at
-  all. The control without that import is exit 0 on the same tree, same run. A sync
-  module with a skewed pin is silent only while nothing imports it, which is not how
-  modules are used.
-- An **async** module (`keywords: ["stonyx-async", "stonyx-module"]`) is imported, and
-  its `config/environment.js` evaluates against *its own* copy of the core, which
-  nothing initialised. **Always loud** — `stonyx serve` exits 1 with
-  `Error: Stonyx has not been initialized yet`, thrown from the module's copy under
-  `node_modules/.pnpm/stonyx@<the module's pin>/`, relabelled as
-  `Stonyx modules with async loading must have a config/environment.js file with
-  default configurations. Module "<name>" failed to load.` The config file that second
-  message points at is present and correct — the message is wrong about the cause (see
-  abofs/stonyx#108).
-
-Measured 2026-09-05 in a two-file consumer pinning `stonyx@0.2.3-beta.96`. Module
-versions are given resolved rather than as `@beta`, because the `beta` tags move
-several times a day and both of these examples stopped reproducing at `@beta` within a
-day of being written:
-
-The first two rows use an `app.js` that does not import the module; the third row is
-that same cron tree with the one-line import added.
-
-| module, resolved | keywords | cores | `stonyx serve` |
-|---|---|---|---|
-| `@stonyx/cron@0.2.1-beta.131` (pins `0.2.3-beta.95`) | `stonyx-module` | 2 | booted, exit **0**, no warning |
-| `@stonyx/sockets@0.1.1-beta.48` (pins `0.2.3-beta.62`) | `stonyx-async`, `stonyx-module` | 2 | exit **1** |
-| the same cron tree, `app.js` importing `@stonyx/cron` | `stonyx-module` | 2 | exit **1** |
-
-The keyword is the only variable, verified in both directions on those same two trees:
-deleting `stonyx-async` from the installed `@stonyx/sockets@0.1.1-beta.48` makes its
-two-core tree boot and exit 0, and adding `stonyx-async` to the installed
-`@stonyx/cron@0.2.1-beta.131` makes its two-core tree exit 1.
+**Two limits of the pre-flight, so absence of a refusal is still not proof.** It only
+looks at `@stonyx/*` packages in the application's `devDependencies` that carry the
+`stonyx-module` keyword, and it compares physical package roots rather than version
+ranges. A copy dragged in by anything else is not counted, and it fails **open** —
+an unreadable or unparseable manifest, or a running core that cannot identify itself,
+produces a `console.warn` naming the probe and no refusal.
 
 Absence of an error is not evidence of a single core. Count.
 

@@ -65,14 +65,19 @@ Tracked in abofs/stonyx#106 and abofs/stonyx#108. Re-derive that column with
 these numbers has moved since it was first written, and four of the five moved on the
 day they were.
 
-**A partial rollout is observable, one module at a time.** Each module's compliance is
-independent, so an application benefits from every module that ships the rule, with no
-wait for the other four. It also benefits, accidentally and temporarily, whenever a
-non-compliant module's pin happens to equal its own core — which is the state of all
-five above, measured 2026-09-05: an application pinning `stonyx@0.2.3-beta.96` resolves
-exactly one core with any of them installed. That is not the rule working. It is the
-rule not being needed this hour, and it reverts the next time the core publishes ahead
-of the modules.
+**A partial rollout is observable in the core COUNT, one module at a time — but not in
+the boot outcome.** Each module's compliance is independent, so every module that ships
+the rule removes one potential copy, with no wait for the other four. The boot outcome
+is not incremental: since abofs/stonyx#108 `loadModules` refuses to start while any
+discovered module resolves a second core, so one non-compliant module with a skewed pin
+refuses the whole application regardless of how many siblings have complied. Count
+copies to see progress; do not expect a partial rollout to make an application boot.
+
+An application also benefits, accidentally and temporarily, whenever a non-compliant
+module's pin happens to equal its own core — which is the state of all five above,
+measured 2026-09-05: an application pinning `stonyx@0.2.3-beta.96` resolves exactly one
+core with any of them installed. That is not the rule working. It is the rule not being
+needed this hour, and it reverts the next time the core publishes ahead of the modules.
 
 Consumer-side guidance, and the command that counts copies, is in
 [Modules — Version alignment](../modules.md#version-alignment).

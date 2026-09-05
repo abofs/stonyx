@@ -1,6 +1,7 @@
 import { confirm, prompt } from '@stonyx/utils/prompt';
 import { createFile, createDirectory, copyFile, fileExists } from '@stonyx/utils/file';
 import { spawn } from 'child_process';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -11,7 +12,7 @@ interface ModuleOption {
   files?: Record<string, () => string>;
 }
 
-const MODULE_OPTIONS: ModuleOption[] = [
+export const MODULE_OPTIONS: ModuleOption[] = [
   {
     question: 'Will this project need a REST server?',
     package: '@stonyx/rest-server',
@@ -58,16 +59,70 @@ export default class DBModel extends Model {
 `;
 }
 
-export function generatePackageJson(name: string, selectedModules: ModuleOption[]): string {
+/**
+ * The npm dist-tag that points at a package's stable release line. Only ever
+ * used as a *release line* selector for `@stonyx/*` modules (see
+ * `releaseTagFor`) -- never as the specifier for the core, which is always
+ * pinned exactly.
+ */
+const STABLE_DIST_TAG = 'latest';
+
+/** Absolute path to this package's own root, from both `src/` and `dist/`. */
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/**
+ * The version of the `stonyx` package running this generator, read from its own
+ * `package.json` at call time.
+ *
+ * Read rather than hardcoded on purpose: a literal would be correct on the day
+ * it was written and silently stale on every day after (abofs/stonyx#113).
+ */
+export function readCoreVersion(): string {
+  const raw = readFileSync(path.join(packageRoot, 'package.json'), 'utf8');
+  const version = (JSON.parse(raw) as { version?: unknown }).version;
+
+  if (typeof version !== 'string' || !version) {
+    throw new Error(`Could not read the stonyx version from ${path.join(packageRoot, 'package.json')}`);
+  }
+
+  return version;
+}
+
+/**
+ * The npm dist-tag naming the release line a version belongs to:
+ * `0.2.3-beta.96` -> `beta`, `0.2.3-alpha.4` -> `alpha`, `0.2.2` -> `latest`.
+ *
+ * Every scaffolded `@stonyx/*` module is requested on the same line as the core
+ * that scaffolded it, so the generated project cannot mix a prerelease core with
+ * modules from the stable line (or the reverse).
+ */
+export function releaseTagFor(version: string): string {
+  const prerelease = /^\d+\.\d+\.\d+-([0-9A-Za-z-]+)(?:\.|$)/.exec(version);
+
+  return prerelease ? prerelease[1] : STABLE_DIST_TAG;
+}
+
+export function generatePackageJson(
+  name: string,
+  selectedModules: ModuleOption[],
+  coreVersion: string = readCoreVersion()
+): string {
+  // The framework is a runtime dependency of the application, pinned exactly to
+  // the core that generated the project.
+  const dependencies: Record<string, string> = { stonyx: coreVersion };
+
   const devDependencies: Record<string, string> = {
     qunit: '^2.24.1',
-    stonyx: 'latest',
     tsx: '^4.21.0',
     typescript: '^5.8.3'
   };
 
+  // Modules are discovered from devDependencies (see docs/modules.md), and are
+  // requested on the core's own release line rather than at `latest`.
+  const moduleTag = releaseTagFor(coreVersion);
+
   for (const mod of selectedModules) {
-    devDependencies[mod.package] = 'latest';
+    devDependencies[mod.package] = moduleTag;
   }
 
   // Sort dependencies alphabetically
@@ -86,6 +141,7 @@ export function generatePackageJson(name: string, selectedModules: ModuleOption[
       start: 'stonyx serve',
       test: "NODE_ENV=test node --import tsx/esm --import ./test/setup.ts node_modules/qunit/bin/qunit.js 'test/**/*-test.ts'"
     },
+    dependencies,
     devDependencies: sorted
   }, null, 2) + '\n';
 }

@@ -250,27 +250,27 @@ async function readOwnVersion(): Promise<string> {
 }
 
 QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function () {
-  QUnit.todo('emits the core at the generator\'s own exact version, read from package.json', async function (assert) {
+  QUnit.test('emits the core at the generator\'s own exact version, read from package.json', async function (assert) {
     const pkg = JSON.parse(generatePackageJson('test-app', []));
     const own = await readOwnVersion();
 
     assert.strictEqual(coreSpecifier(pkg), own, 'core specifier equals the generator\'s own version');
   });
 
-  QUnit.todo('emits the core as an exact version, never a tag or a range', async function (assert) {
+  QUnit.test('emits the core as an exact version, never a tag or a range', async function (assert) {
     const pkg = JSON.parse(generatePackageJson('test-app', []));
 
     assert.ok(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(coreSpecifier(pkg) ?? ''), 'core specifier is an exact semver');
   });
 
-  QUnit.todo('declares the core in dependencies, not devDependencies', async function (assert) {
+  QUnit.test('declares the core in dependencies, not devDependencies', async function (assert) {
     const pkg = JSON.parse(generatePackageJson('test-app', []));
 
     assert.ok(pkg.dependencies && pkg.dependencies.stonyx, 'stonyx is in dependencies');
     assert.notOk(pkg.devDependencies.stonyx, 'stonyx is not in devDependencies');
   });
 
-  QUnit.todo('emits every MODULE_OPTIONS package on the core\'s release line', async function (assert) {
+  QUnit.test('emits every MODULE_OPTIONS package on the core\'s release line', async function (assert) {
     const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
     const options = mod.MODULE_OPTIONS as { package: string }[];
     const releaseTagFor = mod.releaseTagFor as (v: string) => string;
@@ -282,7 +282,7 @@ QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function
     }
   });
 
-  QUnit.todo('emits no dependency at "latest"', async function (assert) {
+  QUnit.test('emits no dependency at "latest"', async function (assert) {
     const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
     const options = mod.MODULE_OPTIONS as { package: string }[];
     const pkg = JSON.parse(generatePackageJson('test-app', options as Parameters<typeof generatePackageJson>[1]));
@@ -293,7 +293,7 @@ QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function
     }
   });
 
-  QUnit.todo('releaseTagFor maps a version to its own release line', async function (assert) {
+  QUnit.test('releaseTagFor maps a version to its own release line', async function (assert) {
     const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
     const releaseTagFor = mod.releaseTagFor as (v: string) => string;
 
@@ -317,7 +317,7 @@ QUnit.module('[Unit] CLI New — scaffolded manifest on disk (#113)', function (
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  QUnit.todo('the written package.json pins the core at the generator\'s own version', async function (assert) {
+  QUnit.test('the written package.json pins the core at the generator\'s own version', async function (assert) {
     const pkg = JSON.parse(await fs.readFile(path.join(projectDir, 'package.json'), 'utf8'));
     const own = await readOwnVersion();
 

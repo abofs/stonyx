@@ -54,8 +54,19 @@ const execFileAsync = promisify(execFile);
 const bootScript = resolve(dirname(fileURLToPath(import.meta.url)), '../helpers/boot-stonyx.ts');
 
 /**
- * Hard upper bound on one boot. A healthy boot takes well under a second, so
- * this is ~40x headroom and never fires in a passing run.
+ * Hard upper bound on one boot. A healthy boot measures 110-133ms at this head
+ * (5 direct runs of `boot-stonyx.ts`), so this is ~150x headroom.
+ *
+ * The bound firing is NOT necessarily a red, and an earlier revision of this
+ * comment was wrong to say it "never fires in a passing run". It rejects only
+ * when the child is still alive at the bound, which surfaces as
+ * `signal: 'SIGKILL'`. A child that has already exited 0 while leaving a QUIET
+ * grandchild holding stdout resolves GREEN at the bound with its marker intact,
+ * because the bound closes the pipes rather than the exit code. Measured at
+ * this head against a child of exactly that shape: 6 boots, 6 GREEN, each at
+ * 20.0s against this 20_000ms bound - 120.0s of wall time, with nothing in the
+ * TAP output saying anything timed out. That is the mode to watch for once
+ * abofs/stonyx#106 puts a module fixture behind these boots.
  */
 const BOOT_TIMEOUT_MS = 20_000;
 
@@ -102,7 +113,12 @@ function makeRoot(prefix: string, pkg?: string): string {
  * cleanly at the bound in that same scenario, because node's own `execFile`
  * timeout destroys `stdout`/`stderr` before signalling (measured on node
  * 24.13.0: both streams `destroyed === true` at settle). Neither form reaps the
- * grandchild — 6 left at ppid 1 either way; the bound covers the child only.
+ * grandchild, but the orphan count is SHAPE-CONDITIONED and an earlier revision
+ * of this comment stated it unconditionally. Measured, 6 boots each: with a
+ * QUIET grandchild, 6 left at ppid 1 under BOTH forms; with a grandchild that
+ * WRITES to stdout, 0 under both, because destroying the read end hands it
+ * EPIPE on its next write (one EPIPE logged per pid, none alive 2s after
+ * settle). The bound covers the child only, in either shape.
  */
 async function boot(rootPath: string, config: Record<string, unknown>): Promise<BootResult> {
   const { stdout, stderr } = await execFileAsync(

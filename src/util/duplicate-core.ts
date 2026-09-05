@@ -23,7 +23,7 @@
  */
 import { createRequire } from 'node:module';
 import { readFileSync, realpathSync } from 'node:fs';
-import { dirname, join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** A resolved `stonyx` package: where it physically is, and what version. */
@@ -47,6 +47,52 @@ function realPath(path: string): string {
   } catch {
     return path;
   }
+}
+
+/**
+ * True exactly for the directories Node's own bare-specifier walk emits.
+ *
+ * `require.resolve.paths(x)` returns the walk FOLLOWED BY the CJS global
+ * folders — `NODE_PATH`, `~/.node_modules`, `~/.node_libraries`, the node
+ * prefix. ESM ignores every one of those, so honouring them invents a
+ * "duplicate" out of an ambient environment variable that the real import never
+ * consults. This workspace exports `NODE_PATH` at a different `stonyx`
+ * (abofs/stonyx#107), so that false positive is not hypothetical: it flips a
+ * tree that boots into a hard refusal.
+ *
+ * The predicate is the walk's own shape, and it is EXACT rather than
+ * approximate. Node emits `<d>/node_modules` for every ancestor-or-self `d` of
+ * the starting directory, and never descends into a directory already named
+ * `node_modules`. So a candidate qualifies iff it is named `node_modules`, its
+ * parent is not, and its parent is an ancestor-or-self of the module dir. Any
+ * global-folder entry meeting all three is by construction already in the walk,
+ * so admitting it changes nothing; every other one is dropped.
+ *
+ * The PREVIOUS form tested only `dirname(candidate)` against the module dir.
+ * For a real walk entry that is the package root and the test holds by
+ * construction — but for a `NODE_PATH` entry the candidate is a raw directory,
+ * so `dirname` is its PARENT, and any module dir under that parent passed. It
+ * went green on macOS only because `os.tmpdir()` yields `/var/folders/...`
+ * while the resolved module dir is `/private/var/folders/...`, so the prefix
+ * comparison missed on `/private` rather than on non-ancestry. It reds on
+ * Linux, and it reds on macOS the moment `TMPDIR` is realpath-clean.
+ *
+ * `Module.globalPaths` would express the same restriction by PROVENANCE rather
+ * than by shape, and it was measured working at runtime — but `@types/node@25`
+ * does not declare it, so it needs an untyped cast whose `?? []` fallback
+ * silently restores the defect if the undeclared property ever moves. This form
+ * typechecks natively and admits the identical set.
+ *
+ * `moduleDir` must already be realpath'd; `coreSeenBy` does that first.
+ */
+export function isWalkEntry(candidate: string, moduleDir: string): boolean {
+  if (basename(candidate) !== 'node_modules') return false;
+
+  const owner = dirname(candidate);
+
+  if (basename(owner) === 'node_modules') return false;
+
+  return moduleDir === owner || moduleDir.startsWith(owner.endsWith(sep) ? owner : owner + sep);
 }
 
 function readPackageJson(dir: string): Record<string, unknown> | null {
@@ -112,13 +158,10 @@ export function runningCore(): CorePackage | null {
  *    the symlink path instead reads the app's flat `node_modules` and reports
  *    the running core for every module — the check would pass vacuously on
  *    exactly the installer `stonyx new` uses.
- *  - Candidate directories are restricted to genuine ANCESTORS of `moduleDir`.
- *    `require.resolve.paths` appends the CJS global folders (`NODE_PATH`,
- *    `~/.node_modules`, the node prefix) after the walk; ESM ignores those
- *    entirely, so honouring them would invent a "duplicate" from an ambient
- *    environment variable the real import never consults. This workspace
- *    exports `NODE_PATH` at a different `stonyx` (abofs/stonyx#107), so that
- *    false positive is not hypothetical.
+ *  - Candidates are restricted to the entries Node's own walk emits, by
+ *    `isWalkEntry`. `require.resolve.paths` appends the CJS global folders
+ *    after the walk and ESM ignores every one of them; see that function for
+ *    why the predicate is what it is and what the previous one got wrong.
  *
  * Returns `null` when no copy is reachable at all — "cannot tell", handled as
  * not-a-duplicate by `findForeignCores`.
@@ -128,10 +171,7 @@ export function coreSeenBy(moduleDir: string): CorePackage | null {
   const candidates = createRequire(join(resolvedModuleDir, 'package.json')).resolve.paths('stonyx') ?? [];
 
   for (const nodeModulesDir of candidates) {
-    const owner = dirname(nodeModulesDir);
-    const isAncestor = resolvedModuleDir === owner || resolvedModuleDir.startsWith(owner.endsWith(sep) ? owner : owner + sep);
-
-    if (!isAncestor) continue;
+    if (!isWalkEntry(nodeModulesDir, resolvedModuleDir)) continue;
 
     const core = asCore(join(nodeModulesDir, 'stonyx'));
 

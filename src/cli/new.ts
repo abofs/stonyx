@@ -70,6 +70,34 @@ const STABLE_DIST_TAG = 'latest';
 /** Absolute path to this package's own root, from both `src/` and `dist/`. */
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+/** A full semver version: `major.minor.patch`, optional prerelease, optional build. */
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/**
+ * A string npm accepts as a *dist-tag* and never reinterprets as a version range.
+ * npm requires a tag to be non-numeric, and `x`/`X` are semver wildcards rather
+ * than tag names, so both are rejected in `releaseTagFor`.
+ */
+const DIST_TAG = /^[A-Za-z][0-9A-Za-z-]*$/;
+
+/**
+ * Rejects any version this generator must not emit.
+ *
+ * `readCoreVersion` used to check only that the field was a non-empty string, so
+ * `"garbage"`, `"0.2"` and `"latest"` all flowed through to the manifest verbatim
+ * and made `releaseTagFor` fall through to `latest` -- the one specifier
+ * abofs/stonyx#113 exists to stop emitting.
+ */
+function assertVersionShape(version: unknown, source: string): asserts version is string {
+  if (typeof version !== 'string' || !version) {
+    throw new Error(`Could not read the stonyx version from ${source}`);
+  }
+
+  if (!SEMVER.test(version)) {
+    throw new Error(`The stonyx version from ${source} is not a semver version: "${version}"`);
+  }
+}
+
 /**
  * The version of the `stonyx` package running this generator, read from its own
  * `package.json` at call time.
@@ -78,12 +106,11 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
  * it was written and silently stale on every day after (abofs/stonyx#113).
  */
 export function readCoreVersion(): string {
-  const raw = readFileSync(path.join(packageRoot, 'package.json'), 'utf8');
+  const manifest = path.join(packageRoot, 'package.json');
+  const raw = readFileSync(manifest, 'utf8');
   const version = (JSON.parse(raw) as { version?: unknown }).version;
 
-  if (typeof version !== 'string' || !version) {
-    throw new Error(`Could not read the stonyx version from ${path.join(packageRoot, 'package.json')}`);
-  }
+  assertVersionShape(version, manifest);
 
   return version;
 }
@@ -96,15 +123,54 @@ export function readCoreVersion(): string {
  * that scaffolded it, so the generated project cannot mix a prerelease core with
  * modules from the stable line (or the reverse).
  *
- * Bound: this assumes a prerelease identifier is also a published dist-tag name.
- * True for `beta` and `alpha`, which are the only two lines the fleet publishes.
- * A core released as e.g. `0.2.3-rc.1` with no `rc` dist-tag would scaffold an
- * unresolvable module specifier -- loudly, at install, not silently.
+ * Throws, rather than guessing, when the prerelease identifier is not usable as a
+ * dist-tag. Returning it verbatim was only safe for *alphabetic* identifiers: npm
+ * parses a numeric or wildcard identifier as a version **range**, so `0.2.3-0`
+ * emitted `"0"` and `0.2.3-x` emitted `"x"`, both of which install with rc=0 and
+ * silently resolve the module's `latest` release -- for `@stonyx/orm` that is
+ * `0.3.1`, which pins `stonyx@0.2.3-beta.11` and so reproduces abofs/stonyx#113
+ * through a different door, with no error. `0.2.3-0` is reachable from this
+ * repo's own `publish.yml` `custom-version` dispatch input, which accepts any
+ * semver string and also expands the keyword `prerelease` to `x.y.z-0`.
+ *
+ * Two bounds remain, both loud rather than silent:
+ *
+ * - An alphabetic identifier is assumed to also be a published dist-tag name.
+ *   True for `beta` and `alpha`, the only two lines the fleet publishes; a core
+ *   released as e.g. `0.2.3-rc.1` with no `rc` dist-tag scaffolds an unresolvable
+ *   module specifier, which fails `pnpm install` with
+ *   `ERR_PNPM_NO_MATCHING_VERSION`. The tag has to exist on every package in
+ *   `MODULE_OPTIONS`, not only on the core.
+ * - On the stable line this returns `latest`, the correct tag for that line -- but
+ *   only useful once the *modules* have advanced their own `latest` tags. Today
+ *   `@stonyx/orm@latest` is `0.3.1` and pins `stonyx@0.2.3-beta.11`, so the module
+ *   `latest` tags must advance before the core's does (abofs/stonyx#115).
  */
 export function releaseTagFor(version: string): string {
-  const prerelease = /^\d+\.\d+\.\d+-([0-9A-Za-z-]+)(?:\.|$)/.exec(version);
+  // Fail closed, not open. Without this the exported function still answered
+  // `latest` for `"garbage"`, `"0.2"`, `""` and `"latest"` itself -- the same
+  // fall-through-to-`latest` shape this change exists to remove, one level down
+  // from the emission path that `generatePackageJson` already guards.
+  assertVersionShape(version, 'the supplied version');
 
-  return prerelease ? prerelease[1] : STABLE_DIST_TAG;
+  const prerelease = /^\d+\.\d+\.\d+-(.*)$/.exec(version);
+
+  if (!prerelease) return STABLE_DIST_TAG;
+
+  const identifier = prerelease[1].split('.')[0];
+
+  if (!DIST_TAG.test(identifier) || /^[xX]$/.test(identifier)) {
+    throw new Error(
+      `Cannot derive a dist-tag from the prerelease identifier "${identifier}" in version "${version}": ` +
+      'npm reads it as a version range, not a tag.'
+    );
+  }
+
+  if (identifier === STABLE_DIST_TAG) {
+    throw new Error(`A prerelease core must not request modules at "${STABLE_DIST_TAG}" (version "${version}").`);
+  }
+
+  return identifier;
 }
 
 export function generatePackageJson(
@@ -112,6 +178,11 @@ export function generatePackageJson(
   selectedModules: ModuleOption[],
   coreVersion: string = readCoreVersion()
 ): string {
+  // `coreVersion` is injectable for tests, so the shape is asserted here too --
+  // otherwise an injected non-semver string reaches the manifest verbatim and
+  // `releaseTagFor` falls through to `latest`.
+  assertVersionShape(coreVersion, 'the supplied core version');
+
   // The framework is a runtime dependency of the application, pinned exactly to
   // the core that generated the project.
   const dependencies: Record<string, string> = { stonyx: coreVersion };

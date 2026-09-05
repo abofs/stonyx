@@ -304,14 +304,51 @@ QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function
     );
   });
 
-  QUnit.test('emits no dependency at "latest"', async function (assert) {
+  // Reconciles the old `emits no dependency at "latest"` guard with the stable
+  // branch of `releaseTagFor`, which the guard contradicted by design: the guard
+  // forbade `latest` unconditionally while `releaseTagFor` returns `latest` for a
+  // stable core, so `dev` would have gone red on the first stable release.
+  //
+  // The decision: `latest` is the correct *module* dist-tag on the stable line, so
+  // `releaseTagFor` is right and the guard was wrong. What must never float is the
+  // *core*, which is the abofs/stonyx#113 invariant. Both halves are asserted over
+  // injected versions rather than the repo's own, so neither goes vacuous or flips
+  // when this package cuts its first stable release.
+  QUnit.test('never emits the core at a floating tag, on any release line', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const modules = mod.MODULE_OPTIONS as Parameters<typeof generatePackageJson>[1];
+
+    for (const coreVersion of ['0.2.3-beta.96', '0.2.3-alpha.50', '0.2.3', await readOwnVersion()]) {
+      const pkg = JSON.parse(generatePackageJson('test-app', modules, coreVersion));
+
+      assert.strictEqual(coreSpecifier(pkg), coreVersion, `core ${coreVersion} is pinned exactly`);
+      assert.notStrictEqual(coreSpecifier(pkg), 'latest', `core ${coreVersion} is not "latest"`);
+    }
+  });
+
+  QUnit.test('emits no module at "latest" while the core is on a prerelease line', async function (assert) {
     const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
     const options = mod.MODULE_OPTIONS as { package: string }[];
-    const pkg = JSON.parse(generatePackageJson('test-app', options as Parameters<typeof generatePackageJson>[1]));
-    const specs = Object.entries({ ...(pkg.dependencies ?? {}), ...pkg.devDependencies });
+    const modules = options as Parameters<typeof generatePackageJson>[1];
 
-    for (const [name, spec] of specs) {
-      assert.notStrictEqual(spec, 'latest', `${name} is not specified as "latest"`);
+    for (const coreVersion of ['0.2.3-beta.96', '0.2.3-alpha.50']) {
+      const pkg = JSON.parse(generatePackageJson('test-app', modules, coreVersion));
+
+      for (const [name, spec] of Object.entries({ ...(pkg.dependencies ?? {}), ...pkg.devDependencies })) {
+        assert.notStrictEqual(spec, 'latest', `core ${coreVersion}: ${name} is not specified as "latest"`);
+      }
+    }
+  });
+
+  QUnit.test('on the stable line, modules are requested at "latest" by design', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const options = mod.MODULE_OPTIONS as { package: string }[];
+    const pkg = JSON.parse(generatePackageJson('test-app', options as Parameters<typeof generatePackageJson>[1], '0.2.3'));
+
+    assert.strictEqual(coreSpecifier(pkg), '0.2.3', 'the core is still pinned exactly');
+
+    for (const option of options) {
+      assert.strictEqual(pkg.devDependencies[option.package], 'latest', `${option.package} at "latest" on the stable line`);
     }
   });
 
@@ -322,6 +359,52 @@ QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function
     assert.strictEqual(releaseTagFor('0.2.3-beta.96'), 'beta', 'beta prerelease -> beta tag');
     assert.strictEqual(releaseTagFor('0.2.3-alpha.49'), 'alpha', 'alpha prerelease -> alpha tag');
     assert.strictEqual(releaseTagFor('0.2.2'), 'latest', 'stable version -> latest tag');
+    assert.strictEqual(releaseTagFor('0.2.3-rc.1'), 'rc', 'rc prerelease -> rc tag (unpublished, but a valid tag name)');
+    assert.strictEqual(releaseTagFor('1.0.0-alpha.beta.1'), 'alpha', 'only the first identifier names the line');
+    assert.strictEqual(releaseTagFor('0.2.3+build.5'), 'latest', 'build metadata is not a prerelease');
+  });
+
+  // npm parses a numeric or wildcard prerelease identifier as a version *range*,
+  // not a dist-tag: `0.2.3-0` emitted `"0"`, which installs with rc=0 and silently
+  // resolves `@stonyx/orm@0.3.1` -- the release that pins `stonyx@0.2.3-beta.11`.
+  // `0.2.3-0` is reachable from this repo's own `publish.yml` dispatch input.
+  QUnit.test('releaseTagFor refuses identifiers npm reads as a version range', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const releaseTagFor = mod.releaseTagFor as (v: string) => string;
+
+    for (const version of ['0.2.3-0', '0.2.3-1.2', '0.2.3-x', '0.2.3-X']) {
+      assert.throws(() => releaseTagFor(version), /not a tag/, `${version} throws rather than emitting a range`);
+    }
+
+    assert.throws(() => releaseTagFor('0.2.3-latest'), /must not request modules at "latest"/,
+      'a prerelease core can never reach the stable dist-tag');
+  });
+
+  // `readCoreVersion` used to accept any non-empty string, so "garbage", "0.2" and
+  // "latest" reached the manifest verbatim and fell through to the `latest` tag.
+  QUnit.test('a non-semver core version is refused, not emitted', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const modules = mod.MODULE_OPTIONS as Parameters<typeof generatePackageJson>[1];
+
+    const releaseTagFor = mod.releaseTagFor as (v: string) => string;
+
+    for (const version of ['garbage', '0.2', '0.2.3.4', 'latest', 'v0.2.3-beta.1', '']) {
+      assert.throws(
+        () => generatePackageJson('test-app', modules, version), /not a semver version|Could not read/,
+        `"${version}" is refused by the emission path`
+      );
+
+      // And by the exported mapping itself, which otherwise answered "latest".
+      assert.throws(
+        () => releaseTagFor(version), /not a semver version|Could not read/,
+        `"${version}" is refused by releaseTagFor`
+      );
+    }
+
+    assert.strictEqual(
+      JSON.parse(generatePackageJson('test-app', modules, '0.2.3-beta.96')).dependencies.stonyx, '0.2.3-beta.96',
+      'a well-formed version still passes'
+    );
   });
 });
 

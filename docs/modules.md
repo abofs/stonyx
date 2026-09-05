@@ -81,16 +81,34 @@ distinct versions:
 pnpm why stonyx --json | node -e '
   let raw = ""; process.stdin.on("data", d => raw += d).on("end", () => {
     const seen = new Set();
-    const walk = (deps) => { for (const [name, dep] of Object.entries(deps || {})) {
-      if (name === "stonyx") seen.add(dep.version);
+    const walk = (deps) => { for (const dep of Object.values(deps || {})) {
+      if (dep.from === "stonyx") seen.add(dep.version);
       walk(dep.dependencies);
     } };
-    for (const project of JSON.parse(raw)) { walk(project.dependencies); walk(project.devDependencies); }
-    console.log([...seen].sort().join("\n"));
+    for (const p of JSON.parse(raw)) { walk(p.dependencies); walk(p.devDependencies); walk(p.optionalDependencies); }
+    console.log([...seen].sort().join("\n") || "(no stonyx resolved)");
   });'
 ```
 
 More than one line is this defect.
+
+Three details of that walk are load-bearing, each measured against a tree built to
+break the obvious version of it:
+
+- **Key on `dep.from`, not on the tree key.** The tree key is the *alias*, not the
+  package. A manifest declaring both `"stonyx": "0.2.3-beta.96"` and
+  `"legacy-core": "npm:stonyx@0.2.2"` installs both cores — `ls node_modules/.pnpm`
+  shows `stonyx@0.2.2` and `stonyx@0.2.3-beta.96` — and a walk matching
+  `name === "stonyx"` reports **1**. Matching `dep.from === "stonyx"` reports 2.
+- **Walk `optionalDependencies` too.** `pnpm why --json` emits the project's own
+  `optionalDependencies` as a separate top-level key. A core declared there is missed
+  entirely by a walk that reads only `dependencies` and `devDependencies` — measured
+  reporting **0**. (Transitive optional deps are flattened into `dependencies` and
+  were already counted.)
+- **Say something when nothing is found.** Without the `|| "(no stonyx resolved)"`
+  fallback the miss above prints a single blank line, which reads as "clean" under
+  *more than one line is this defect*. Zero cores and one core are not the same
+  answer, and neither should be silent.
 
 **Do not count directories.** `find node_modules -type d -name stonyx` also matches
 store entries `pnpm` leaves behind from an earlier install — measured reporting two

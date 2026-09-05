@@ -137,8 +137,24 @@ if (!keywords.includes('stonyx-async')) {
 }
 ```
 
-- A **sync** module (`keywords: ["stonyx-module"]`) is never imported, so its copy of
-  the core is never loaded and never complains. **Always silent.**
+- A **sync** module (`keywords: ["stonyx-module"]`) is never imported *by the loader*,
+  so its copy of the core is never loaded there and never complains. **Silent through
+  module discovery — not silent for the application.** The gate above buys silence
+  from `loadModules`; it buys nothing the moment your own code imports the module.
+  Measured on the two-core `@stonyx/cron` tree below, with one line added to `app.js`
+  as the only variable:
+
+  ```js
+  import '@stonyx/cron';
+  ```
+
+  turns exit **0** into exit **1**, `Error: Stonyx has not been initialized yet`,
+  thrown from `.pnpm/stonyx@0.2.3-beta.95/…/dist/main.js:94` — cron's own pin — and
+  arriving through the app-entry import at
+  `.pnpm/stonyx@0.2.3-beta.96/…/dist/cli/serve.js:43`, never through `loadModules` at
+  all. The control without that import is exit 0 on the same tree, same run. A sync
+  module with a skewed pin is silent only while nothing imports it, which is not how
+  modules are used.
 - An **async** module (`keywords: ["stonyx-async", "stonyx-module"]`) is imported, and
   its `config/environment.js` evaluates against *its own* copy of the core, which
   nothing initialised. **Always loud** — `stonyx serve` exits 1 with
@@ -154,10 +170,14 @@ versions are given resolved rather than as `@beta`, because the `beta` tags move
 several times a day and both of these examples stopped reproducing at `@beta` within a
 day of being written:
 
+The first two rows use an `app.js` that does not import the module; the third row is
+that same cron tree with the one-line import added.
+
 | module, resolved | keywords | cores | `stonyx serve` |
 |---|---|---|---|
 | `@stonyx/cron@0.2.1-beta.131` (pins `0.2.3-beta.95`) | `stonyx-module` | 2 | booted, exit **0**, no warning |
 | `@stonyx/sockets@0.1.1-beta.48` (pins `0.2.3-beta.62`) | `stonyx-async`, `stonyx-module` | 2 | exit **1** |
+| the same cron tree, `app.js` importing `@stonyx/cron` | `stonyx-module` | 2 | exit **1** |
 
 The keyword is the only variable, verified in both directions on those same two trees:
 deleting `stonyx-async` from the installed `@stonyx/sockets@0.1.1-beta.48` makes its

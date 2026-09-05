@@ -113,14 +113,23 @@ module('[Unit] loadModules', function(hooks) {
   // T3 — GUARD, on the exact line abofs/stonyx#106 rewrites (modules.ts:61-63).
   // Dies under M2 (`startsWith('@stonyx/')` -> `'@zzzzzz/'`), the NARROWING
   // direction, and under both WIDENING mutants, which an earlier version of
-  // this test could not see:
+  // this test could not see. Both figures below are measured against this file
+  // as it stood at 01d13ff, where the suite was 97 tests:
   //     `startsWith('@stonyx/')` -> `startsWith('@')`   measured 97/0 SURVIVED
-  //     drop the prefix filter entirely                 measured 96/1 SURVIVED
+  //     drop the prefix filter entirely                 measured 97/0 SURVIVED
+  // An earlier revision of this note recorded the second as "96/1 SURVIVED",
+  // which is self-contradictory and wrong -- no test failed. Re-measured at
+  // this head, both mutants read 97/1 with this test the sole failure.
+  //
   // Both were invisible because every negative fixture was UNSCOPED (`lodash`,
   // `my-stonyx-thing`), so nothing in the suite distinguished "only @stonyx/"
   // from "only scoped". `@types/node` is the scoped non-stonyx fixture that
   // does; it is in this repo's own devDependencies, so it is exactly what a
-  // real consumer manifest looks like.
+  // real consumer manifest looks like. It is load-bearing for the
+  // `startsWith('@')` widening SPECIFICALLY: delete that one fixture line and
+  // that mutant goes back to 98/0 SURVIVED, while drop-the-filter stays killed
+  // at 97/1 -- an unfiltered list also stats `lodash` and `my-stonyx-thing`,
+  // which the warnings assertion below already sees. Both are needed.
   //
   // The widening direction CANNOT be asserted through `waitForModule`, and this
   // is the trap: `waitForModule` unconditionally prepends `@stonyx/`

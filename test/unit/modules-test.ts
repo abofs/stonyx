@@ -49,6 +49,16 @@ function installAsyncModule(
   });
 }
 
+/**
+ * Races `waitForModule` against a fixed window. Used instead of a bare `await`
+ * so that a mutation which leaves a promise unresolved fails the test rather
+ * than hanging the run. Returns `'resolved'` or `'TIMEOUT'`; a rejection
+ * propagates.
+ */
+function raceModule(name: string): Promise<string> {
+  return Promise.race([ waitForModule(name).then(() => 'resolved'), timeout(250) ]);
+}
+
 module('[Unit] loadModules', function(hooks) {
   hooks.afterEach(function() {
     while (roots.length) removeRoot(roots.pop()!);
@@ -92,8 +102,7 @@ module('[Unit] loadModules', function(hooks) {
 
     await loadModules({}, rootPath, stubChronicle().asChronicle());
 
-    await waitForModule('t3-alpha');
-    assert.true(true, 'waitForModule resolves for the @stonyx/ scoped dependency');
+    assert.strictEqual(await raceModule('t3-alpha'), 'resolved', 'the @stonyx/ scoped dependency resolves');
 
     for (const unregistered of [ 'lodash', 'my-stonyx-thing' ]) {
       await assert.rejects(
@@ -144,8 +153,7 @@ module('[Unit] loadModules', function(hooks) {
     assert.deepEqual(modules, [], 'sync module is never instantiated');
     assert.deepEqual(Object.keys(config), [ 'rootPath' ], 'sync module contributes no config block');
 
-    await waitForModule('t5-sync');
-    assert.true(true, 'its promise is resolved anyway');
+    assert.strictEqual(await raceModule('t5-sync'), 'resolved', 'its promise is resolved anyway');
   });
 
   // T6 — GUARD. Dies under M6 (missingFileCallback fabricates a package instead of warning + returning '').
@@ -293,8 +301,7 @@ module('[Unit] loadModules', function(hooks) {
     assert.strictEqual(loadError, undefined, `loadModules resolved without a TypeError, got: ${String(loadError)}`);
 
     for (const name of [ 't11-a-async', 't11-b-sync', 't11-c-sync' ]) {
-      await waitForModule(name);
-      assert.true(true, `${name} was registered and resolved`);
+      assert.strictEqual(await raceModule(name), 'resolved', `${name} was registered and resolved`);
     }
   });
 
@@ -336,11 +343,17 @@ module('[Unit] loadModules', function(hooks) {
 
     // Premise first: a module that DOES resolve must win the same race window,
     // otherwise a timeout below would only prove the harness is broken.
-    const premise = await Promise.race([ waitForModule('t13-alpha').then(() => 'resolved'), timeout(250) ]);
-    assert.strictEqual(premise, 'resolved', 'premise: a loaded module resolves well inside the race window');
+    assert.strictEqual(
+      await raceModule('t13-alpha'),
+      'resolved',
+      'premise: a loaded module resolves well inside the race window'
+    );
 
-    const hazard = await Promise.race([ waitForModule('t13-nokey').then(() => 'resolved'), timeout(250) ]);
-    assert.strictEqual(hazard, 'TIMEOUT', 'the keyword-rejected module never resolves (F1, pinned as-is)');
+    assert.strictEqual(
+      await raceModule('t13-nokey'),
+      'TIMEOUT',
+      'the keyword-rejected module never resolves (F1, pinned as-is)'
+    );
   });
 });
 

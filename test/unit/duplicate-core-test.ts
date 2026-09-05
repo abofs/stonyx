@@ -28,6 +28,7 @@ import {
   coreSeenBy,
   duplicateCoreMessage,
   findForeignCores,
+  owningCore,
   runningCore,
   type ForeignCore,
 } from '../../src/util/duplicate-core.js';
@@ -391,6 +392,60 @@ module('[Unit] duplicate-core detector', function(hooks) {
     assert.deepEqual(findForeignCores(modules, null, message => blind.push(message)), [], 'with no running core nothing is reported as foreign');
     assert.strictEqual(blind.length, 1, 'but the skipped pre-flight is announced');
     assert.ok(blind[0]?.includes('could not identify itself'), `naming what went wrong, got: ${blind[0]}`);
+  });
+
+  // D15 — `owningCore` stops at the FIRST `package.json`, not the first one
+  // named `stonyx`. Its docblock argues at length that this is load-bearing:
+  // continuing past it walks out of the resolved package, and inside this
+  // repo's own worktree the next ancestor with a manifest IS named `stonyx`,
+  // which would make every fixture look like a match.
+  //
+  // That argument had no test. A mutant that walked past a non-stonyx manifest
+  // survived the entire suite — the same shape PC-D and PC-E had before the
+  // previous round, and the reason `owningCore` is exported at all.
+  test('D15: the owner walk stops at the first package.json, not the first stonyx one', function(assert) {
+    const base = root({ name: 'stonyx', version: '0.0.0-owner' });
+    const intruder = join(base, 'vendor');
+    const deeper = join(intruder, 'lib', 'nested');
+    const plain = join(base, 'plain', 'nested');
+
+    mkdirSync(deeper, { recursive: true });
+    mkdirSync(plain, { recursive: true });
+    writeFileSync(join(intruder, 'package.json'), JSON.stringify({ name: 'not-stonyx', version: '1.2.3' }));
+
+    // CONTROL: with no manifest in the way the walk DOES reach the stonyx root,
+    // so a null below is the stop, not a walk that never ascends.
+    assert.strictEqual(owningCore(plain)?.root, base, 'control: the walk ascends to the owning stonyx package when nothing intervenes');
+    assert.strictEqual(owningCore(base)?.version, '0.0.0-owner', 'control: and identifies it by its own manifest');
+    assert.strictEqual(
+      owningCore(deeper),
+      null,
+      'a non-stonyx package.json between the start and the stonyx root ends the walk — it does not report the ancestor'
+    );
+  });
+
+  // D16 — `asCore`'s `'unknown'` version fallback. A nested core whose manifest
+  // omits `version` is malformed, not absent: dropping the whole core because
+  // one field is missing would silently un-detect a real duplicate, which is
+  // the exact failure #108 exists to remove. The fallback survived every
+  // mutation until this test.
+  test('D16: a nested core with no version is still reported, as "unknown"', function(assert) {
+    const rootPath = root({ name: 'd16-app' });
+    installModule(rootPath, '@stonyx/d16-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const nested = join(rootPath, 'node_modules', '@stonyx/d16-mod', 'node_modules', 'stonyx');
+
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'package.json'), JSON.stringify({ name: 'stonyx', type: 'module' }));
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d16-mod');
+    const foreign = findForeignCores([ { name: '@stonyx/d16-mod', dir: moduleDir } ]);
+
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, nested, 'the versionless copy is still resolved');
+    assert.strictEqual(coreSeenBy(moduleDir)?.version, 'unknown', 'and reported as "unknown" rather than dropped');
+    assert.strictEqual(foreign.length, 1, 'so the duplicate is still detected');
+    assert.ok(duplicateCoreMessage(foreign).includes('unknown'), 'and the diagnostic says so instead of printing nothing');
   });
 
   // D4 — the message. #108 was filed because the OLD message named a file that

@@ -164,8 +164,15 @@ function asCore(dir: string, report: InconclusiveReporter = IGNORE): CorePackage
  * past it would walk out of the resolved package and could report an unrelated
  * ancestor — inside this repo's own worktree, that ancestor is the repo root,
  * which IS named `stonyx`. That would make every fixture look like a match.
+ *
+ * EXPORTED FOR ITS GUARD. That paragraph is an argument that a behaviour is
+ * load-bearing, and until D15 the entire suite could not tell the two
+ * behaviours apart — a mutant that walked past a non-stonyx manifest survived
+ * every test. A docblock asserting a property with no test that can red is the
+ * defect family this cluster exists to remove, so the function is exported for
+ * one reason: so that claim can fail.
  */
-function owningCore(startDir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
+export function owningCore(startDir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
   let dir = realPath(startDir);
 
   for (;;) {

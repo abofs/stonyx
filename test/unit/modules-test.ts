@@ -12,6 +12,11 @@
  * and the suite becomes order-dependent.
  */
 import QUnit from 'qunit';
+import { execFile } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import loadModules, { waitForModule } from '../../src/modules.js';
 import type { StoynxConfig } from '../../src/modules.js';
 import {
@@ -27,6 +32,61 @@ import {
 } from '../helpers/module-fixture.js';
 
 const { module, test } = QUnit;
+
+const execFileAsync = promisify(execFile);
+const plainNodeModulesScript = resolve(
+  dirname(fileURLToPath(import.meta.url)), '../helpers/load-modules-plain-node.mjs'
+);
+
+/**
+ * Same hard bound as `import-config-test.ts` and `standalone-transform-test.ts`:
+ * `execFile` has no default timeout and this repo sets no
+ * `QUnit.config.testTimeout`, so an unbounded child hangs the run with no TAP.
+ */
+const SUBPROCESS_TIMEOUT_MS = 20_000;
+
+interface PlainNodeLoadResult {
+  thrown: { message: string; hasCause: boolean; causeMessage: string | null } | null;
+  stderr: string[];
+}
+
+/** Drives `dist/modules.js` under plain node — no tsx. */
+async function loadModulesInPlainNode(rootPath: string): Promise<PlainNodeLoadResult> {
+  const { stdout, stderr } = await execFileAsync(
+    'node',
+    [ plainNodeModulesScript, rootPath ],
+    { timeout: SUBPROCESS_TIMEOUT_MS, killSignal: 'SIGKILL' }
+  );
+
+  const marker = stdout.split('__LOAD_MODULES__')[1];
+  if (!marker) throw new Error(`plain-node run produced no result. stdout: ${stdout}\nstderr: ${stderr}`);
+
+  return JSON.parse(marker) as PlainNodeLoadResult;
+}
+
+/**
+ * A root with one installed async module named `@stonyx/<slug>-mod`, plus
+ * whatever config files the caller asks for. Deliberately writes raw files
+ * rather than reusing `installAsyncModule`, because the point is to control
+ * the config file's EXTENSION.
+ */
+function createPlainNodeRoot(slug: string, files: Record<string, string>): string {
+  const name = `@stonyx/${slug}-mod`;
+  const rootPath = root({ name: `${slug}-app`, devDependencies: { [name]: '1.0.0' }});
+
+  installModule(rootPath, name, { main: 'main.js', keywords: [ 'stonyx-module', 'stonyx-async' ]}, {
+    'main.js': moduleSource('PlainNodeMod'),
+    ...files,
+  });
+
+  // `installModule` refuses traversal but not nesting; config/ needs creating
+  // only when the caller asked for no files under it.
+  mkdirSync(join(rootPath, 'node_modules', name, 'config'), { recursive: true });
+  if (Object.keys(files).length === 0) writeFileSync(join(rootPath, 'node_modules', name, 'config', '.keep'), '');
+
+  return rootPath;
+}
+
 
 const roots: string[] = [];
 
@@ -538,6 +598,70 @@ module('[Unit] loadModules', function(hooks) {
       await raceModule('t13-nokey'),
       'TIMEOUT',
       'the keyword-rejected module never resolves (F1, pinned as-is)'
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // F-2. What `loadModules` REPORTS when a module ships `config/environment.ts`.
+  //
+  // `importConfig` distinguishes "no config" from "config present, declined".
+  // `docs/conventions/framework-modules.md` asserted that a module shipping a
+  // `.ts` config "is reported loudly and never as a missing config". Measured
+  // end-to-end through `loadModules`, that was FALSE for the thrown error: the
+  // relabel at modules.ts:118 replaces the loader's precise error with a
+  // generic "must have a config/environment.js file" and attaches no `cause`.
+  // The distinction survives on stderr only, via `console.error` at :117.
+  //
+  // The doc now says that. This test is what stops it drifting back, and it is
+  // the evidence abofs/stonyx#108 inherits. It PINS current behaviour — it is
+  // not a bug report. Fixing modules.ts is #108's job, not #105's; when #108
+  // lands, this test is the one that should red.
+  //
+  // Runs under plain node because under this suite's own tsx the `.ts` config
+  // loads fine and there is no failure to observe at all.
+  test('a module shipping config/environment.ts throws the SAME message as one with no config (F-2, pinned as-is)', async function(assert) {
+    const declined = createPlainNodeRoot('f2-declined', {
+      'config/environment.ts': 'const config: { port: number } = { port: 7 };\nexport default config;\n',
+    });
+    const absent = createPlainNodeRoot('f2-absent', {});
+
+    const declinedResult = await loadModulesInPlainNode(declined);
+    const absentResult = await loadModulesInPlainNode(absent);
+
+    // Premise: both fixtures must actually fail, or "identical" is vacuous.
+    assert.ok(declinedResult.thrown, 'premise: the .ts-config module fails to load');
+    assert.ok(absentResult.thrown, 'premise: the no-config module fails to load');
+
+    assert.strictEqual(
+      declinedResult.thrown?.message,
+      'Stonyx modules with async loading must have a config/environment.js file with default configurations. Module "@stonyx/f2-declined-mod" failed to load.',
+      'the THROWN error names a missing config/environment.js, not the refusal'
+    );
+    assert.strictEqual(
+      declinedResult.thrown?.message.replace('f2-declined-mod', 'MOD'),
+      absentResult.thrown?.message.replace('f2-absent-mod', 'MOD'),
+      'byte-identical to the no-config case once the module name is normalised — the thrown error cannot tell them apart'
+    );
+
+    // ...and the loud version reaches stderr, which is the half that IS true.
+    assert.strictEqual(declinedResult.stderr.length, 1, 'exactly one error was logged');
+    assert.ok(
+      declinedResult.stderr[0]?.includes('Config present but not loadable:'),
+      `stderr carries the loader's precise error, got: ${declinedResult.stderr[0]}`
+    );
+    assert.ok(
+      declinedResult.stderr[0]?.includes('ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING'),
+      'and names the Node refusal code'
+    );
+    assert.ok(
+      absentResult.stderr[0]?.includes('Config not found:'),
+      `the no-config case logs "not found" instead, so stderr DOES distinguish them, got: ${absentResult.stderr[0]}`
+    );
+
+    // Fact 2 for #108: the relabel drops the cause chain entirely.
+    assert.notOk(
+      declinedResult.thrown?.hasCause,
+      'the rethrow carries no `cause` — a supervisor loses the original error'
     );
   });
 });

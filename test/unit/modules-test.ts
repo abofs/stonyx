@@ -119,7 +119,8 @@ module('[Unit] loadModules', function(hooks) {
   //     drop the prefix filter entirely                 measured 97/0 SURVIVED
   // An earlier revision of this note recorded the second as "96/1 SURVIVED",
   // which is self-contradictory and wrong -- no test failed. Re-measured at
-  // this head, both mutants read 97/1 with this test the sole failure.
+  // this head (99 tests), both mutants read 98/1 with this test the sole
+  // failure.
   //
   // Both were invisible because every negative fixture was UNSCOPED (`lodash`,
   // `my-stonyx-thing`), so nothing in the suite distinguished "only @stonyx/"
@@ -127,8 +128,8 @@ module('[Unit] loadModules', function(hooks) {
   // does; it is in this repo's own devDependencies, so it is exactly what a
   // real consumer manifest looks like. It is load-bearing for the
   // `startsWith('@')` widening SPECIFICALLY: delete that one fixture line and
-  // that mutant goes back to 98/0 SURVIVED, while drop-the-filter stays killed
-  // at 97/1 -- an unfiltered list also stats `lodash` and `my-stonyx-thing`,
+  // that mutant goes back to 99/0 SURVIVED, while drop-the-filter stays killed
+  // at 98/1 -- an unfiltered list also stats `lodash` and `my-stonyx-thing`,
   // which the warnings assertion below already sees. Both are needed.
   //
   // The widening direction CANNOT be asserted through `waitForModule`, and this
@@ -404,12 +405,12 @@ module('[Unit] loadModules', function(hooks) {
   // pre-registered" is the INVARIANT, and one character separates them.
   // Measured at this head, simulating a completed #106 by inverting T2's
   // assertions exactly as T2's note prescribes:
-  //     T2 inverted + correct rule 3                     98/0
-  //     T2 inverted + desync + `?.` at modules.ts:97     98/0  — IDENTICAL
+  //     T2 inverted + correct rule 3                     99/0
+  //     T2 inverted + desync + `?.` at modules.ts:97     99/0  — IDENTICAL
   // The second of those ships a rule 3 where every `dependencies`-declared
   // module loads and `waitForModule` on it throws "was not registered"
   // forever, with the suite fully green. The line above splits them: still
-  // 98/0 under a correct rule 3, but 97/1 with this test the SOLE failure
+  // 99/0 under a correct rule 3, but 98/1 with this test the SOLE failure
   // under the desync, rejecting with "Could wait for module:
   // @stonyx/t21-sync. Module was not registered in project dependencies".
   //
@@ -421,7 +422,7 @@ module('[Unit] loadModules', function(hooks) {
   // the same list as `:61`.
   //
   // The invariant line cannot be added HERE. Measured at this head with no
-  // rule 3, it reds this test (97/1, sole failure): `t21-sync` is legitimately
+  // rule 3, it reds this test (98/1, sole failure): `t21-sync` is legitimately
   // never registered today. It only becomes meaningful once rule 3 lands,
   // which is why this is a note and not an assertion.
   test('does not throw for a sync stonyx-module declared only in dependencies (forward guard for #106)', async function(assert) {

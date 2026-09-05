@@ -147,15 +147,20 @@ module('[Unit] dist freshness', function() {
 
 /**
  * `refusalIsAboutTheConfig` directly. Driving it through `importConfig` covers
- * the two path-comparison outcomes (T11/T12) and NOTHING else — measured, both
- * of these mutations left the suite at 118 pass / 0 fail:
+ * the two path-comparison outcomes (T11/T12) and NOTHING else.
  *
- *   `if (!refused) return true` -> `return false`
- *   the `realPath` catch -> `throw`
+ * The predicate's FAIL DIRECTION is the property under test here, not any one
+ * message shape. `true` means "re-frame this as a refusal of the config" —
+ * which is F-3 — so "I could not parse this message" must return `false` and
+ * let Node's own error through. Every gap in the two extraction patterns is
+ * then a lost re-framing rather than a wrong filename, and a pattern edit
+ * cannot silently restore the pre-F-3 behaviour.
  *
- * Two unreachable branches inside the fix for F-3, which is the same defect
- * F-6 is about, one layer down. Found by asking the question the bar requires:
- * what smaller instance does my own fix contain?
+ * That is why the negative cases below outnumber the positive ones, and why
+ * the `file://` positive case is load-bearing: when the fallback returned
+ * `true`, deleting the `file://` alternation left the suite green, because a
+ * test asserting `true` cannot tell "the branch worked" from "nothing was
+ * extracted and the fallback fired".
  */
 module('[Unit] refusalIsAboutTheConfig', function() {
   const configPath = '/tmp/app/config/environment.ts';
@@ -200,15 +205,89 @@ module('[Unit] refusalIsAboutTheConfig', function() {
     ));
   });
 
-  // The "cannot tell" fallback. An unrecognised message shape must keep the
-  // loud re-frame, not silently drop it — dropping it is a silent decline,
-  // which is the exact thing invariant I2 exists to prevent.
-  test('true when no path can be extracted at all (unknown message shape)', function(assert) {
-    assert.true(refusalIsAboutTheConfig('the runtime said no', configPath));
-    assert.true(
-      refusalIsAboutTheConfig('Unknown file extension ".ts" for C:\\app\\environment.ts', configPath),
-      'a Windows path is not extracted, so it degrades to the previous behaviour rather than misfiring'
+  // F-7. The `false`-expecting case for the shape `loadModules` actually
+  // emits. Without this, the only `file://` test asserted `true` — and `true`
+  // is also what the "nothing extracted" fallback used to return, so deleting
+  // the `(?:file:\/\/)?` alternation left the suite at 124 pass / 0 fail
+  // while reintroducing the F-3 false positive in production.
+  test('false when a file:// refusal names a DIFFERENT file', function(assert) {
+    assert.false(refusalIsAboutTheConfig(
+      `Stripping types is currently unsupported for files under node_modules, for "file:///tmp/app/node_modules/dep/thing.ts"`,
+      configPath
+    ));
+  });
+
+  // F-7, the widened patterns. The old body class excluded space, parens and
+  // quotes, so these four either failed extraction (verdict `true` — F-3
+  // verbatim) or backtracked onto an earlier `.` and compared a truncated
+  // non-path (verdict `false` — the I2 re-framing silently lost). Measured
+  // end-to-end through dist/ before the fix: `/tmp/<x>/plain/...` was correct
+  // and `/tmp/<x>/My Project/...` was not, one character apart.
+  const spacedConfig = '/tmp/my apps/v1.2/app (2)/config/environment.ts';
+
+  test('true when the refusal names a config whose path has a space or parens', function(assert) {
+    assert.true(refusalIsAboutTheConfig(
+      `Stripping types is currently unsupported for files under node_modules, for "${spacedConfig}"`,
+      spacedConfig
+    ), 'quoted shape');
+    assert.true(refusalIsAboutTheConfig(
+      `Unknown file extension ".ts" for ${spacedConfig}`, spacedConfig
+    ), 'bare shape — no quotes to bound the path, so the message tail does');
+  });
+
+  test('false when a space-or-paren path refusal names a DIFFERENT file', function(assert) {
+    assert.false(refusalIsAboutTheConfig(
+      `Stripping types is currently unsupported for files under node_modules, for "/tmp/my apps/v1.2/app (2)/node_modules/dep/thing.ts"`,
+      spacedConfig
+    ), 'quoted shape — must not truncate onto the v1.2 dot and compare a stub');
+    assert.false(refusalIsAboutTheConfig(
+      `Unknown file extension ".ts" for /tmp/my apps/v1.2/app (2)/node_modules/dep/thing.ts`,
+      spacedConfig
+    ), 'bare shape');
+  });
+
+  test('true when the config path itself contains a quote', function(assert) {
+    const quoted = "/tmp/stone's apps/config/environment.ts";
+
+    assert.true(refusalIsAboutTheConfig(
+      `Stripping types is currently unsupported for files under node_modules, for "${quoted}"`,
+      quoted
+    ), 'the quoted pattern runs to the message-final quote, not the first one');
+  });
+
+  // THE fail-direction test. This is the whole point of F-7: an unparseable
+  // message must NOT be re-framed as "your config was refused", because that
+  // sentence names a file the runtime never complained about. Flipping this
+  // back to `true` is flipping the bug back on.
+  test('false when no path can be extracted at all, so the raw error propagates', function(assert) {
+    assert.false(
+      refusalIsAboutTheConfig('the runtime said no', configPath),
+      'an unrecognised shape must not be re-framed as a refusal of the config'
     );
+    assert.false(
+      refusalIsAboutTheConfig('Unknown file extension ".ts" for C:\\app\\environment.ts', configPath),
+      'a Windows path is not extracted; the consumer gets Node\'s own message, not a wrong filename'
+    );
+  });
+
+  // Pins the leading-context class `(?:^|\s)`. Without it the bare pattern
+  // starts at the first `/` anywhere in the message, so a RELATIVE path is
+  // promoted to an absolute one — and this message's absolute suffix is
+  // exactly the config, so the promotion would claim the config was refused.
+  test('a relative path in the message is not promoted to an absolute one', function(assert) {
+    assert.false(refusalIsAboutTheConfig(
+      `Unknown file extension ".ts" for lib${configPath}`, configPath
+    ), 'lib/tmp/app/... must not be read as /tmp/app/...');
+  });
+
+  // Pins `\.[A-Za-z0-9]+` on the bare pattern. Both patterns are greedy and
+  // neither is `$`-anchored; the extension requirement is what makes the bare
+  // one stop at the end of a path rather than run on into whatever Node
+  // appends after it.
+  test('true when the refusal names the config with trailing text after the path', function(assert) {
+    assert.true(refusalIsAboutTheConfig(
+      `Unknown file extension ".ts" for ${configPath} on this runtime`, configPath
+    ));
   });
 });
 

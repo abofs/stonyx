@@ -73,10 +73,10 @@ const FILE_TYPE_REFUSAL_CODES = new Set([
 ]);
 
 /**
- * The first absolute POSIX path named in a Node error message.
+ * The absolute POSIX path a Node refusal names, in the two shapes it names it.
  *
- * Both refusal codes name the file they refused, but in different shapes —
- * measured on node v24.13.0:
+ * Both refusal codes name the file they refused, but differently — measured on
+ * node v24.13.0 at this head:
  *
  *   ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING
  *     Stripping types is currently unsupported for files under node_modules,
@@ -84,16 +84,34 @@ const FILE_TYPE_REFUSAL_CODES = new Set([
  *   ERR_UNKNOWN_FILE_EXTENSION
  *     Unknown file extension ".ts" for /private/tmp/x/environment.ts
  *
- * The second names a bare extension BEFORE it names the file, which is why
- * this requires a leading `/` rather than matching the first quoted token.
- * Neither error exposes the path as an own property: `Object.keys(error)` is
- * `['code']` for both, so the message is the only source.
+ * In BOTH shapes the path is the last thing in the message, and both patterns
+ * are GREEDY, so each runs to the message tail rather than being bounded by a
+ * character class on the path body: the quoted one to the message-final quote,
+ * the bare one to the last `.ext` in the message. That is the whole mechanism —
+ * measured, an explicit `\s*$` anchor on either one is an equivalent mutant,
+ * so it is not there. The previous single pattern instead excluded space, `(`,
+ * `)`, `'` and `"` from the body,
+ * which meant a config under `~/My Project/` either failed extraction outright
+ * or backtracked onto an earlier `.` and yielded a truncated non-path.
+ * Measured end-to-end through `dist/` before this change, two consumers one
+ * character apart, each with a good `.js` config that nested-imports a `.ts`
+ * under `node_modules`:
  *
- * Deliberately POSIX-only. A Windows path is simply not extracted, and
- * `refusalIsAboutTheConfig` treats "no path extracted" as "cannot tell" and
- * keeps the pre-existing behaviour, so this degrades rather than misfires.
+ *   .../plain/config/environment.js       -> raw ERR_UNSUPPORTED_...
+ *                                            naming node_modules/dep/thing.ts
+ *   .../My Project/config/environment.js  -> "Config present but not loadable:
+ *                                            .../My Project/config/environment.js"
+ *
+ * The second names a `.js` that loaded and ran perfectly. Anchoring on the
+ * tail extracts both, and the quoted form tolerates quotes inside the path
+ * because it runs to the message-final quote rather than to the first one.
+ *
+ * Still POSIX-only, and still not exhaustive — a Windows path is not extracted,
+ * and neither is a message with trailing text after the path. That is now SAFE
+ * rather than merely degraded: see `refusalIsAboutTheConfig`.
  */
-const REFUSED_PATH_PATTERN = /(?:^|[\s"'(])((?:file:\/\/)?\/[^\s"'()]+\.[A-Za-z0-9]+)/;
+const QUOTED_REFUSED_PATH = /["']((?:file:\/\/)?\/.+)["']/;
+const BARE_REFUSED_PATH = /(?:^|\s)((?:file:\/\/)?\/.+\.[A-Za-z0-9]+)/;
 
 /** Resolves symlinks so `/tmp/...` and `/private/tmp/...` compare equal. */
 function realPath(path: string): string {
@@ -102,6 +120,23 @@ function realPath(path: string): string {
   } catch {
     return path;
   }
+}
+
+/**
+ * The path a refusal names, or `null` when no path can be extracted from it.
+ *
+ * Quoted shape first: it is the more specific of the two. Measured at this
+ * head the order is an EQUIVALENT mutant — swapping it leaves the suite at
+ * 130/0, because neither measured message shape matches both patterns — so the
+ * order is a statement of intent, not a load-bearing branch. Recorded here so
+ * the next mutation run does not re-chase it.
+ */
+function refusedPathFrom(message: string): string | null {
+  const refused = QUOTED_REFUSED_PATH.exec(message)?.[1] ?? BARE_REFUSED_PATH.exec(message)?.[1];
+
+  if (!refused) return null;
+
+  return refused.startsWith('file://') ? fileURLToPath(refused) : refused;
 }
 
 /**
@@ -115,22 +150,29 @@ function realPath(path: string): string {
  * instance of it is the exact `.ts`-under-node_modules case this loader's own
  * docs tell people to look for.
  *
- * Returns true when the refusal names our path, or when no path could be
- * extracted at all (unknown message shape — keep re-framing rather than
- * silently losing the loud error that invariant I2 exists for).
+ * FAIL DIRECTION — this is the property, not an implementation detail.
+ * `true` means "re-frame this as a refusal of the config", which is exactly the
+ * F-3 misdirection above. So when no path can be extracted this returns
+ * `false`, and the caller rethrows Node's own error untouched, `cause` and all.
+ * The consumer then reads what actually happened instead of a friendly sentence
+ * about the wrong file. This is what makes every future gap in the two patterns
+ * harmless: an unparseable message costs the I2 re-framing, not correctness.
+ *
+ * It previously returned `true` here, on the reasoning that keeping the loud
+ * re-frame mattered more than getting the filename right. Measured, that is
+ * backwards: the raw error is loud too — `main.ts`'s `NODE_ENV=test` swallow
+ * only absorbs `CONFIG_NOT_FOUND_PREFIX`, which a Node refusal never starts
+ * with — so failing this way loses nothing and stops naming the wrong file.
  *
  * Exported ONLY so its branches can be reached directly. Driving it through
- * `importConfig` reaches the two path-comparison outcomes and nothing else:
- * the "no path extractable" fallback and the `realPath` catch both survived
- * mutation with the suite green. A predicate inside the guard that makes
- * failures loud does not get to have branches no test can reach.
+ * `importConfig` reaches the two path-comparison outcomes and nothing else.
+ * A predicate inside the guard that makes failures loud does not get to have
+ * branches no test can reach.
  */
 export function refusalIsAboutTheConfig(message: string, configPath: string): boolean {
-  const refused = REFUSED_PATH_PATTERN.exec(message)?.[1];
+  const refusedPath = refusedPathFrom(message);
 
-  if (!refused) return true;
-
-  const refusedPath = refused.startsWith('file://') ? fileURLToPath(refused) : refused;
+  if (refusedPath === null) return false;
 
   return refusedPath === configPath || realPath(refusedPath) === realPath(configPath);
 }

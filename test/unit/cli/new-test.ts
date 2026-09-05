@@ -270,16 +270,38 @@ QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function
     assert.notOk(pkg.devDependencies.stonyx, 'stonyx is not in devDependencies');
   });
 
+  // Pinned to expected literals, not to `releaseTagFor`. Comparing the emitted
+  // specifier against the same function the emitter used made this test unable to
+  // fail: replacing `releaseTagFor`'s body with a constant left it green. Three
+  // injected release lines mean no constant can satisfy it.
   QUnit.test('emits every MODULE_OPTIONS package on the core\'s release line', async function (assert) {
     const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
     const options = mod.MODULE_OPTIONS as { package: string }[];
-    const releaseTagFor = mod.releaseTagFor as (v: string) => string;
-    const own = await readOwnVersion();
-    const pkg = JSON.parse(generatePackageJson('test-app', options as Parameters<typeof generatePackageJson>[1]));
+    const modules = options as Parameters<typeof generatePackageJson>[1];
 
-    for (const option of options) {
-      assert.strictEqual(pkg.devDependencies[option.package], releaseTagFor(own), `${option.package} on the core's release line`);
+    const expectations: [string, string][] = [
+      ['0.2.3-beta.96', 'beta'],
+      ['0.2.3-alpha.50', 'alpha'],
+      ['0.2.3', 'latest']
+    ];
+
+    for (const [coreVersion, expectedTag] of expectations) {
+      const pkg = JSON.parse(generatePackageJson('test-app', modules, coreVersion));
+
+      for (const option of options) {
+        assert.strictEqual(
+          pkg.devDependencies[option.package], expectedTag,
+          `core ${coreVersion}: ${option.package} is requested at "${expectedTag}"`
+        );
+      }
     }
+
+    // And every option really is emitted, so the loop above cannot pass vacuously.
+    const emitted = JSON.parse(generatePackageJson('test-app', modules, '0.2.3-beta.96'));
+    assert.strictEqual(
+      options.filter(o => emitted.devDependencies[o.package]).length, options.length,
+      'every MODULE_OPTIONS package appears in devDependencies'
+    );
   });
 
   QUnit.test('emits no dependency at "latest"', async function (assert) {

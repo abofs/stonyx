@@ -120,6 +120,32 @@ module('[Unit] standalone-transform', function(hooks) {
   });
 });
 
+/**
+ * SCAFFOLD for abofs/stonyx#109 T15-T20: the six scenarios below are re-expressed
+ * as real `new Stonyx(...)` + `await Stonyx.ready` boots, each in its own
+ * subprocess (`Stonyx` is a process-global singleton). `applyStandaloneTransform`
+ * above is deleted in a subsequent commit. Must die under S1, S3 and S2f.
+ */
+module('[Unit] standalone-transform (real boot)', function() {
+  // T15 — scoped @stonyx/rest-server name, rootPath dir WITHOUT a `stonyx-` prefix (AC2 row C).
+  test.skip('TODO T15: scoped name wraps config under restServer', function(assert) { assert.ok(false); });
+
+  // T16 — unscoped stonyx-rest-server name, rootPath dir WITH a `stonyx-` prefix (AC2 row A).
+  test.skip('TODO T16: unscoped name wraps config under restServer', function(assert) { assert.ok(false); });
+
+  // T17 — non-stonyx name in a `stonyx-` prefixed dir (AC2 row B): config stays flat.
+  test.skip('TODO T17: non-stonyx name leaves config flat', function(assert) { assert.ok(false); });
+
+  // T18 — missing package.json: config stays flat, boot does not throw.
+  test.skip('TODO T18: missing package.json leaves config flat', function(assert) { assert.ok(false); });
+
+  // T19 — malformed package.json: config stays flat, boot does not throw.
+  test.skip('TODO T19: malformed package.json leaves config flat', function(assert) { assert.ok(false); });
+
+  // T20 — sibling config.modules merges as siblings of the wrapped key.
+  test.skip('TODO T20: sibling config.modules merges at the top level', function(assert) { assert.ok(false); });
+});
+
 module('[Unit] resolveModuleName', function(hooks) {
   hooks.beforeEach(function() {
     dir = mkdtempSync(join(tmpdir(), 'stonyx-resolve-module-name-'));

@@ -45,6 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
   importConfig,
+  refusalIsAboutTheConfig,
   CONFIG_NOT_FOUND_PREFIX,
   CONFIG_NOT_LOADABLE_PREFIX,
 } from '../../src/util/import-config.js';
@@ -77,7 +78,7 @@ interface PlainNodeResult {
 }
 
 /** Drives `dist/util/import-config.js` under plain node — no tsx. */
-async function importConfigInPlainNode(base: string): Promise<PlainNodeResult> {
+async function importConfigInPlainNode(base: string, nodeFlags: string[] = []): Promise<PlainNodeResult> {
   // F-5. This asserts against `dist/`, so a stale `dist/` makes the assertion
   // meaningless rather than merely wrong. Measured: with M2 applied to `src/`
   // and the build skipped, every one of these tests passed.
@@ -85,7 +86,7 @@ async function importConfigInPlainNode(base: string): Promise<PlainNodeResult> {
 
   const { stdout, stderr } = await execFileAsync(
     'node',
-    [ plainNodeScript, base ],
+    [ ...nodeFlags, plainNodeScript, base ],
     { timeout: SUBPROCESS_TIMEOUT_MS, killSignal: 'SIGKILL' }
   );
 
@@ -140,6 +141,73 @@ module('[Unit] dist freshness', function() {
       [],
       `every plain-node test in this repo asserts against dist/; if this list is non-empty they are ` +
       `asserting against code that is not in src/. Run \`pnpm build\`. Stale: ${stale.join('; ')}`
+    );
+  });
+});
+
+/**
+ * `refusalIsAboutTheConfig` directly. Driving it through `importConfig` covers
+ * the two path-comparison outcomes (T11/T12) and NOTHING else — measured, both
+ * of these mutations left the suite at 118 pass / 0 fail:
+ *
+ *   `if (!refused) return true` -> `return false`
+ *   the `realPath` catch -> `throw`
+ *
+ * Two unreachable branches inside the fix for F-3, which is the same defect
+ * F-6 is about, one layer down. Found by asking the question the bar requires:
+ * what smaller instance does my own fix contain?
+ */
+module('[Unit] refusalIsAboutTheConfig', function() {
+  const configPath = '/tmp/app/config/environment.ts';
+
+  test('true when the refusal names the config as a bare path', function(assert) {
+    assert.true(refusalIsAboutTheConfig(
+      `Unknown file extension ".ts" for ${configPath}`, configPath
+    ));
+  });
+
+  test('true when the refusal names the config as a quoted path', function(assert) {
+    assert.true(refusalIsAboutTheConfig(
+      `Stripping types is currently unsupported for files under node_modules, for "${configPath}"`,
+      configPath
+    ));
+  });
+
+  // Node emits BOTH shapes for the same code. Measured at this head: driven
+  // through `importConfig` directly the path is bare, but through `loadModules`
+  // the same error names `file:///private/var/...`. Deleting the `file://`
+  // branch on the strength of the first two samples would have been wrong.
+  test('true when the refusal names the config as a file:// URL', function(assert) {
+    assert.true(refusalIsAboutTheConfig(
+      `Stripping types is currently unsupported for files under node_modules, for "file://${configPath}"`,
+      configPath
+    ));
+  });
+
+  test('false when the refusal names a DIFFERENT file (the F-3 false positive)', function(assert) {
+    assert.false(refusalIsAboutTheConfig(
+      `Stripping types is currently unsupported for files under node_modules, for "/tmp/app/node_modules/dep/thing.ts"`,
+      configPath
+    ));
+  });
+
+  // Reaches the `realPath` catch: neither path exists, so `realpathSync`
+  // throws for both and the fallback comparison must still say "not ours".
+  // Without the catch this is an ENOENT crash instead of a verdict.
+  test('false, not a crash, when neither path exists on disk', function(assert) {
+    assert.false(refusalIsAboutTheConfig(
+      `Unknown file extension ".ts" for /nope/does/not/exist.ts`, configPath
+    ));
+  });
+
+  // The "cannot tell" fallback. An unrecognised message shape must keep the
+  // loud re-frame, not silently drop it — dropping it is a silent decline,
+  // which is the exact thing invariant I2 exists to prevent.
+  test('true when no path can be extracted at all (unknown message shape)', function(assert) {
+    assert.true(refusalIsAboutTheConfig('the runtime said no', configPath));
+    assert.true(
+      refusalIsAboutTheConfig('Unknown file extension ".ts" for C:\\app\\environment.ts', configPath),
+      'a Windows path is not extracted, so it degrades to the previous behaviour rather than misfiring'
     );
   });
 });
@@ -213,7 +281,7 @@ module('[Unit] importConfig', function(hooks) {
   });
 
   // T5 — AC2-a. Invariant I2. A config the consumer wrote at an extension this
-  // loader will not read is NOT "not found". Dies if the UNREADABLE_EXTENSIONS
+  // loader will not read is NOT "not found". Dies if the UNRESOLVED_EXTENSIONS
   // branch is removed (it then falls through to `Config not found:`).
   test('a config at an unsupported extension is "present but not loadable", NOT "not found"', async function(assert) {
     writeFileSync(`${basePath}.mjs`, `export default { source: 'mjs' };\n`);
@@ -447,6 +515,62 @@ module('[Unit] importConfig', function(hooks) {
       result.message?.includes('beta.95 loaded the .js here'),
       'and discloses that this state used to boot — the change is deliberate, not a surprise'
     );
+  });
+
+  // ---------------------------------------------------------------------
+  // T15 — F-6. `ERR_UNKNOWN_FILE_EXTENSION` in `FILE_TYPE_REFUSAL_CODES`.
+  //
+  // The PR body called this one untestable "because this environment does not
+  // have a Node without type stripping". That was wrong, and the cost of it
+  // being wrong was a set member no test could reach: deleting
+  // `'ERR_UNKNOWN_FILE_EXTENSION'` from the set left the suite at 116 pass /
+  // 0 fail. An unreachable branch in the guard that exists to make failures
+  // loud is the same defect the guard is for.
+  //
+  // The runtime is reachable with a flag on this exact Node (v24.13.0):
+  // `--no-experimental-strip-types` turns off type stripping, and the same
+  // `.ts` config then produces
+  //   Unknown file extension ".ts" for /private/tmp/…/environment.ts
+  // instead of loading. That is precisely the runtime every consumer on a Node
+  // without type stripping is on, so this is not a contrived flag — it is the
+  // only way to simulate that fleet from here.
+  test('a .ts config on a runtime with no type stripping is loud, not absent (ERR_UNKNOWN_FILE_EXTENSION)', async function(assert) {
+    writeFileSync(
+      `${basePath}.ts`,
+      `const config: { source: string } = { source: 'ts' };\nexport default config;\n`
+    );
+
+    const result = await importConfigInPlainNode(basePath, [ '--no-experimental-strip-types' ]);
+
+    assert.notOk(result.ok, 'premise: without type stripping the .ts does not load');
+    assert.ok(
+      result.message?.startsWith(CONFIG_NOT_LOADABLE_PREFIX),
+      `re-framed as present-but-not-loadable, got: ${result.message}`
+    );
+    assert.notOk(
+      result.message?.startsWith(CONFIG_NOT_FOUND_PREFIX),
+      'and NOT as absent — which is the whole point of I2'
+    );
+    assert.equal(
+      result.causeCode,
+      'ERR_UNKNOWN_FILE_EXTENSION',
+      'the second FILE_TYPE_REFUSAL_CODES member is the one that fired'
+    );
+  });
+
+  // T16 — the control for T15, and for the flag itself. The SAME plain-node
+  // runtime WITHOUT the flag loads the same file. Without this, T15 passing is
+  // consistent with "the harness is broken and nothing loads under plain node".
+  test('the same .ts config loads on the same runtime with type stripping on (control)', async function(assert) {
+    writeFileSync(
+      `${basePath}.ts`,
+      `const config: { source: string } = { source: 'ts' };\nexport default config;\n`
+    );
+
+    const result = await importConfigInPlainNode(basePath);
+
+    assert.ok(result.ok, 'loads with type stripping on');
+    assert.deepEqual(result.value, { source: 'ts' }, 'returns the default export');
   });
 
   // T14 — the control for T13's `sibling` half. SAME refused `.ts`, no `.js`

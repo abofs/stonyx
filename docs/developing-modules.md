@@ -43,7 +43,7 @@ export default class MyModule {
 
 Async modules must include `config/environment.js` with sensible defaults. **This file is always `.js`, never `.ts`** — Node refuses to type-strip inside `node_modules`, so a `.ts` module config cannot be loaded by any consumer:
 
-```ts
+```js
 export default {
   logColor: 'cyan',
   logMethod: 'myModule',

@@ -20,10 +20,18 @@ import { fileURLToPath, pathToFileURL } from 'url';
 const LOADABLE_EXTENSIONS = [ 'ts', 'js' ] as const;
 
 /**
- * Extensions a consumer plausibly writes a config as, that this loader will not
- * read. Their only purpose is to be DETECTED: see `CONFIG_NOT_LOADABLE_PREFIX`.
+ * Extensions a consumer plausibly writes a config as, that this loader does not
+ * RESOLVE. Their only purpose is to be DETECTED: see `CONFIG_NOT_LOADABLE_PREFIX`.
+ *
+ * Named for what is actually true of them. `.mjs`, `.cjs` and `.json` are all
+ * perfectly readable by Node — `import()` handles every one of them today.
+ * Nothing here is unreadable; they are simply not in `LOADABLE_EXTENSIONS`, so
+ * this loader never forms a path with them, and a consumer who writes one gets
+ * "config present but not loadable" instead of a silent "not found". The old
+ * name, UNREADABLE_EXTENSIONS, asserted a property of Node that is false, and
+ * invited a future reader to "fix" it by adding them to the resolver.
  */
-const UNREADABLE_EXTENSIONS = [ 'mts', 'cts', 'tsx', 'jsx', 'mjs', 'cjs', 'json' ] as const;
+const UNRESOLVED_EXTENSIONS = [ 'mts', 'cts', 'tsx', 'jsx', 'mjs', 'cjs', 'json' ] as const;
 
 /**
  * "There is no config here." Callers are allowed to treat this as benign —
@@ -110,8 +118,14 @@ function realPath(path: string): string {
  * Returns true when the refusal names our path, or when no path could be
  * extracted at all (unknown message shape — keep re-framing rather than
  * silently losing the loud error that invariant I2 exists for).
+ *
+ * Exported ONLY so its branches can be reached directly. Driving it through
+ * `importConfig` reaches the two path-comparison outcomes and nothing else:
+ * the "no path extractable" fallback and the `realPath` catch both survived
+ * mutation with the suite green. A predicate inside the guard that makes
+ * failures loud does not get to have branches no test can reach.
  */
-function refusalIsAboutTheConfig(message: string, configPath: string): boolean {
+export function refusalIsAboutTheConfig(message: string, configPath: string): boolean {
   const refused = REFUSED_PATH_PATTERN.exec(message)?.[1];
 
   if (!refused) return true;
@@ -125,7 +139,7 @@ export async function importConfig<T = unknown>(basePath: string): Promise<T> {
   const matches = LOADABLE_EXTENSIONS.filter(ext => existsSync(`${basePath}.${ext}`));
 
   if (matches.length === 0) {
-    const declined = UNREADABLE_EXTENSIONS.filter(ext => existsSync(`${basePath}.${ext}`));
+    const declined = UNRESOLVED_EXTENSIONS.filter(ext => existsSync(`${basePath}.${ext}`));
 
     if (declined.length > 0) {
       throw new Error(

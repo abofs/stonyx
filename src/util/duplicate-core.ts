@@ -112,6 +112,28 @@ const IGNORE: InconclusiveReporter = () => {};
  * `<app>/node_modules/node_modules` is not an ancestor of it. Measured: a core
  * planted two levels deep resolves to the real core, and is correctly ignored.
  *
+ * THE REJECTED ALTERNATIVE, and the correction that goes with it. While the
+ * candidates still came from `require.resolve.paths`, `Module.globalPaths` was
+ * reviewed as the screen instead of a shape test, and rejected here on typing
+ * grounds plus the claim that the two "admit the identical set". MEASURED, that
+ * claim is FALSE, and false in the direction that matters: `globalPaths` filters
+ * by STRING MEMBERSHIP, so whenever `NODE_PATH` names a directory that is also
+ * a genuine walk entry, the provenance screen drops the walk entry too. Pointed
+ * at `<app>/node_modules` with a real second core inside it:
+ *
+ *   NODE_PATH=<app>/node_modules   provenance -> no core found
+ *                                  shape      -> 0.0.0-APP-LOCAL-SECOND-CORE
+ *   NODE_PATH unset (control)      provenance -> 0.0.0-APP-LOCAL-SECOND-CORE
+ *                                  shape      -> 0.0.0-APP-LOCAL-SECOND-CORE
+ *
+ * That is a false NEGATIVE on the commonest tree there is — a second core in
+ * the app's own `node_modules` going invisible the moment a developer exports
+ * `NODE_PATH` at it. So the rejection was right and the stated reason was not:
+ * it is not an equal-but-untyped alternative, it is a narrower one that would
+ * have introduced a miss. Generating the walk retires the question entirely —
+ * there is no list to screen and no environment read — which is why neither
+ * screen survives here.
+ *
  * ORDER IS LOAD-BEARING — it is what makes the shadowing case detectable, since
  * the first candidate carrying a core is the one returned. It is Node's own
  * order, verified positionally rather than assumed: a distinct core planted in

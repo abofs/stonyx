@@ -18,6 +18,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import loadModules, { waitForModule } from '../../src/modules.js';
+import { assertDistIsFresh } from '../helpers/dist-freshness.js';
 import type { StoynxConfig } from '../../src/modules.js';
 import {
   captureConsole,
@@ -52,6 +53,8 @@ interface PlainNodeLoadResult {
 
 /** Drives `dist/modules.js` under plain node — no tsx. */
 async function loadModulesInPlainNode(rootPath: string): Promise<PlainNodeLoadResult> {
+  assertDistIsFresh('loadModulesInPlainNode');
+
   const { stdout, stderr } = await execFileAsync(
     'node',
     [ plainNodeModulesScript, rootPath ],

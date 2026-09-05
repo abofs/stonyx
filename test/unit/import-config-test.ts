@@ -48,6 +48,7 @@ import {
   CONFIG_NOT_FOUND_PREFIX,
   CONFIG_NOT_LOADABLE_PREFIX,
 } from '../../src/util/import-config.js';
+import { assertDistIsFresh, staleDistArtifacts } from '../helpers/dist-freshness.js';
 
 const { module, test } = QUnit;
 
@@ -77,6 +78,11 @@ interface PlainNodeResult {
 
 /** Drives `dist/util/import-config.js` under plain node — no tsx. */
 async function importConfigInPlainNode(base: string): Promise<PlainNodeResult> {
+  // F-5. This asserts against `dist/`, so a stale `dist/` makes the assertion
+  // meaningless rather than merely wrong. Measured: with M2 applied to `src/`
+  // and the build skipped, every one of these tests passed.
+  assertDistIsFresh('importConfigInPlainNode');
+
   const { stdout, stderr } = await execFileAsync(
     'node',
     [ plainNodeScript, base ],
@@ -96,6 +102,8 @@ interface BootResult {
 
 /** One real `new Stonyx(...)` + `await Stonyx.ready` in its own process. */
 async function boot(rootPath: string, config: Record<string, unknown>): Promise<BootResult> {
+  assertDistIsFresh('boot');
+
   const { stdout, stderr } = await execFileAsync(
     'node',
     [ '--import', 'tsx', bootScript, rootPath, JSON.stringify(config) ],
@@ -107,6 +115,34 @@ async function boot(rootPath: string, config: Record<string, unknown>): Promise<
 
   return JSON.parse(marker) as BootResult;
 }
+
+/**
+ * F-5. The freshness guard the plain-node tests never had.
+ *
+ * `pnpm test` is `pnpm build && qunit`, so CI always ran a fresh `dist/` and
+ * this hole was invisible there. It is not invisible in watch mode or an IDE
+ * runner, both of which invoke the qunit binary directly. Measured at this
+ * head, before the guard: apply M2 (`LOADABLE_EXTENSIONS` -> `[ 'js', 'ts' ]`)
+ * to `src/util/import-config.ts`, skip the build, run
+ *   node --import tsx node_modules/qunit/bin/qunit.js 'test/**\/*-test.ts'
+ * -> rc=0, 115 pass / 0 fail. The mutation `b9d087a` exists to catch survived
+ * because every plain-node assertion was reading last build's artifact.
+ *
+ * The remedy for a defect about untrustworthy evidence contained a smaller
+ * copy of that same defect. Its own control is in the commit message.
+ */
+module('[Unit] dist freshness', function() {
+  test('dist/ is built from the src/ in this working tree', function(assert) {
+    const stale = staleDistArtifacts();
+
+    assert.deepEqual(
+      stale,
+      [],
+      `every plain-node test in this repo asserts against dist/; if this list is non-empty they are ` +
+      `asserting against code that is not in src/. Run \`pnpm build\`. Stale: ${stale.join('; ')}`
+    );
+  });
+});
 
 module('[Unit] importConfig', function(hooks) {
   hooks.beforeEach(function() {

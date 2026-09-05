@@ -347,7 +347,11 @@ export function generateTsConfig(): string {
   }, null, 2) + '\n';
 }
 
-function runPnpmInstall(projectDir: string): Promise<void> {
+/**
+ * Rejects when `pnpm install` fails, either by exiting non-zero or by failing to
+ * spawn. Exported so the rejection path is testable without a network round-trip.
+ */
+export function runPnpmInstall(projectDir: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn('pnpm', ['install'], {
       cwd: projectDir,
@@ -466,7 +470,19 @@ export default async function newCommand({ args }: { args: string[] }): Promise<
   try {
     await runPnpmInstall(projectDir);
   } catch (error) {
-    console.error('Failed to install dependencies. Run `pnpm install` manually in the project directory.');
+    // `pnpm`'s own diagnostic already reached the terminal via stdio: 'inherit'.
+    // What used to be missing is the exit code: this catch discarded `error` and
+    // fell through to the success banner, so `stonyx new` announced success and
+    // exited 0 on a project with no node_modules -- loud to a human, silent to any
+    // supervisor, CI job or wrapper reading the status.
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error(`\n✗ Project "${appName}" was created, but its dependencies are NOT installed.`);
+    console.error(`\n  cd ${appName}`);
+    console.error('  pnpm install\n');
+
+    process.exitCode = 1;
+
+    return;
   }
 
   console.log(`\n✓ Project "${appName}" created successfully!`);

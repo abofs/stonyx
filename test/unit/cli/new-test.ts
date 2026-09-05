@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import newCommand, {
+  runPnpmInstall,
   scaffoldProject,
   generateAppTs,
   generateTsConfig,
@@ -405,6 +406,52 @@ QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function
       JSON.parse(generatePackageJson('test-app', modules, '0.2.3-beta.96')).dependencies.stonyx, '0.2.3-beta.96',
       'a well-formed version still passes'
     );
+  });
+});
+
+// `stonyx new` used to catch a failed install, discard the error and print
+// `✓ Project "..." created successfully!` before exiting 0, so nothing reading the
+// status could tell a scaffolded-and-installed project from a scaffolded-and-broken
+// one. The catch now propagates. `runPnpmInstall` is the rejection it relies on;
+// both failure modes below are offline and complete in tens of milliseconds.
+QUnit.module('[Unit] CLI New — failed install is not a success (#113)', function (hooks) {
+  let tempDir: string;
+
+  hooks.beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stonyx-new-install-'));
+  });
+
+  hooks.afterEach(async function () {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  QUnit.test('runPnpmInstall rejects when pnpm exits non-zero', async function (assert) {
+    await fs.writeFile(path.join(tempDir, 'package.json'), '{ this is not json', 'utf8');
+
+    let rejected = false;
+    let message = '';
+
+    try {
+      await runPnpmInstall(tempDir);
+    } catch (error) {
+      rejected = true;
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    assert.true(rejected, 'a non-zero pnpm exit rejects rather than resolving');
+    assert.true(/exited with code/.test(message), `the exit code is carried in the error (got: ${message})`);
+  });
+
+  QUnit.test('runPnpmInstall rejects when pnpm cannot be spawned', async function (assert) {
+    let rejected = false;
+
+    try {
+      await runPnpmInstall(path.join(tempDir, 'no', 'such', 'directory'));
+    } catch {
+      rejected = true;
+    }
+
+    assert.true(rejected, 'a spawn failure rejects rather than resolving');
   });
 });
 

@@ -396,6 +396,34 @@ module('[Unit] loadModules', function(hooks) {
   // and `loadModules` trivially resolves. The assertion is deliberately
   // narrow — "does not throw" — because the pass condition must survive rule 3
   // changing what gets loaded. #106 must keep this test green.
+  //
+  // #106 MUST ALSO ADD to this test, inside #106's own diff, at the same time
+  // it flips T2:
+  //     assert.strictEqual(await raceModule('t21-sync'), 'resolved', …);
+  // "Does not throw" is the SYMPTOM. "Every discovered module is
+  // pre-registered" is the INVARIANT, and one character separates them.
+  // Measured at this head, simulating a completed #106 by inverting T2's
+  // assertions exactly as T2's note prescribes:
+  //     T2 inverted + correct rule 3                     98/0
+  //     T2 inverted + desync + `?.` at modules.ts:97     98/0  — IDENTICAL
+  // The second of those ships a rule 3 where every `dependencies`-declared
+  // module loads and `waitForModule` on it throws "was not registered"
+  // forever, with the suite fully green. The line above splits them: still
+  // 98/0 under a correct rule 3, but 97/1 with this test the SOLE failure
+  // under the desync, rejecting with "Could wait for module:
+  // @stonyx/t21-sync. Module was not registered in project dependencies".
+  //
+  // And if this test reds at `:97` inside #106, adding `?.` there is NOT the
+  // fix. `modules.ts:43` already carries that exact optional chain three lines
+  // from `initializeModule`, so it is the first thing to hand — and it only
+  // converts a loud TypeError into a promise that is registered nowhere and
+  // resolves never. The fix is to make the registration loop at `:66` consume
+  // the same list as `:61`.
+  //
+  // The invariant line cannot be added HERE. Measured at this head with no
+  // rule 3, it reds this test (97/1, sole failure): `t21-sync` is legitimately
+  // never registered today. It only becomes meaningful once rule 3 lands,
+  // which is why this is a note and not an assertion.
   test('does not throw for a sync stonyx-module declared only in dependencies (forward guard for #106)', async function(assert) {
     const rootPath = root({ name: 't21-app', dependencies: { '@stonyx/t21-sync': '1.0.0' }});
     installModule(rootPath, '@stonyx/t21-sync', { keywords: [ 'stonyx-module' ], main: 'main.js' }, {

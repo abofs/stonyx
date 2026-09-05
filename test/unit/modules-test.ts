@@ -345,10 +345,14 @@ module('[Unit] loadModules', function(hooks) {
     assert.strictEqual(error?.code, 'ERR_MODULE_NOT_FOUND', `rejects with ERR_MODULE_NOT_FOUND, got: ${String(error)}`);
   });
 
-  // T9 — GUARD, and pins F4: the thrown message blames a missing
-  // config/environment.js even when the config file is present and the real
-  // failure is something else. Dies under: delete `console.error(error)` at modules.ts:117.
-  test('relabels an async module load failure but logs the underlying error', async function(assert) {
+  // T9 — FLIPPED BY abofs/stonyx#108. It previously PINNED F4: the thrown
+  // message blamed a missing config/environment.js even though that file was
+  // present, and the real error survived only as an unlinked `console.error`.
+  // Both halves are now inverted — the throw names the step that actually
+  // failed and carries the original as `cause`, and nothing is written to
+  // stderr behind the caller's back.
+  // Dies under: reverting modules.ts's split try/catch to the single relabel.
+  test('names the real load failure and attaches it as `cause`, without a side-channel log', async function(assert) {
     const rootPath = root({ name: 't9-app', devDependencies: { '@stonyx/t9-nomain': '1.0.0' }});
     installModule(rootPath, '@stonyx/t9-nomain', { keywords: [ 'stonyx-module', 'stonyx-async' ]}, {
       'config/environment.js': environmentSource({ port: 9 }),
@@ -365,17 +369,22 @@ module('[Unit] loadModules', function(hooks) {
       capture.restore();
     }
 
-    assert.strictEqual(
-      (error as Error | undefined)?.message,
-      'Stonyx modules with async loading must have a config/environment.js file with default configurations. Module "@stonyx/t9-nomain" failed to load.',
-      'the thrown message names config/environment.js (which exists) — F4, pinned as-is'
+    const thrown = error as Error | undefined;
+
+    assert.ok(
+      thrown?.message.startsWith('Stonyx module "@stonyx/t9-nomain" failed while importing its entry point'),
+      `the thrown message names the step that failed, got: ${thrown?.message}`
     );
-    assert.strictEqual(capture.errors.length, 1, 'the underlying error was logged');
+    assert.notOk(
+      thrown?.message.includes('must have a config/environment.js file'),
+      'and no longer blames a config file that is present and correct'
+    );
     assert.strictEqual(
-      (capture.errors[0] as NodeJS.ErrnoException | undefined)?.code,
+      (thrown?.cause as NodeJS.ErrnoException | undefined)?.code,
       'ERR_MODULE_NOT_FOUND',
-      'and the underlying failure is a missing entry point, not a missing config'
+      'the original error is reachable through `cause`, not only on stderr'
     );
+    assert.strictEqual(capture.errors.length, 0, 'and nothing was written to stderr behind the caller');
   });
 
   // T10 — GUARD, and pins F3: the standalone path passes the raw kebab-case
@@ -605,24 +614,21 @@ module('[Unit] loadModules', function(hooks) {
   });
 
   // ---------------------------------------------------------------------
-  // F-2. What `loadModules` REPORTS when a module ships `config/environment.ts`.
+  // F-2 — FLIPPED BY abofs/stonyx#108, exactly as its own comment said it
+  // would be. It previously pinned the fact that `loadModules` threw a
+  // BYTE-IDENTICAL message for "module ships config/environment.ts" and
+  // "module ships no config at all": the relabel at modules.ts:118 discarded
+  // `importConfig`'s precise error, attached no `cause`, and let the
+  // distinction survive on stderr only, through an unlinked `console.error`.
   //
-  // `importConfig` distinguishes "no config" from "config present, declined".
-  // `docs/conventions/framework-modules.md` asserted that a module shipping a
-  // `.ts` config "is reported loudly and never as a missing config". Measured
-  // end-to-end through `loadModules`, that was FALSE for the thrown error: the
-  // relabel at modules.ts:118 replaces the loader's precise error with a
-  // generic "must have a config/environment.js file" and attaches no `cause`.
-  // The distinction survives on stderr only, via `console.error` at :117.
-  //
-  // The doc now says that. This test is what stops it drifting back, and it is
-  // the evidence abofs/stonyx#108 inherits. It PINS current behaviour — it is
-  // not a bug report. Fixing modules.ts is #108's job, not #105's; when #108
-  // lands, this test is the one that should red.
+  // That is invariant I2 failing end-to-end on the module path. #105 restored
+  // the distinction inside `importConfig`; #116 corrected the doc sentence and
+  // left the code; this is the code. `CONFIG_NOT_LOADABLE_PREFIX` had zero
+  // non-test importers in `src/` until now.
   //
   // Runs under plain node because under this suite's own tsx the `.ts` config
   // loads fine and there is no failure to observe at all.
-  test('a module shipping config/environment.ts throws the SAME message as one with no config (F-2, pinned as-is)', async function(assert) {
+  test('a module shipping config/environment.ts throws a DIFFERENT, causal error from one with no config', async function(assert) {
     const declined = createPlainNodeRoot('f2-declined', {
       'config/environment.ts': 'const config: { port: number } = { port: 7 };\nexport default config;\n',
     });
@@ -635,37 +641,44 @@ module('[Unit] loadModules', function(hooks) {
     assert.ok(declinedResult.thrown, 'premise: the .ts-config module fails to load');
     assert.ok(absentResult.thrown, 'premise: the no-config module fails to load');
 
-    assert.strictEqual(
-      declinedResult.thrown?.message,
-      'Stonyx modules with async loading must have a config/environment.js file with default configurations. Module "@stonyx/f2-declined-mod" failed to load.',
-      'the THROWN error names a missing config/environment.js, not the refusal'
-    );
-    assert.strictEqual(
-      declinedResult.thrown?.message.replace('f2-declined-mod', 'MOD'),
-      absentResult.thrown?.message.replace('f2-absent-mod', 'MOD'),
-      'byte-identical to the no-config case once the module name is normalised — the thrown error cannot tell them apart'
-    );
-
-    // ...and the loud version reaches stderr, which is the half that IS true.
-    assert.strictEqual(declinedResult.stderr.length, 1, 'exactly one error was logged');
     assert.ok(
-      declinedResult.stderr[0]?.includes('Config present but not loadable:'),
-      `stderr carries the loader's precise error, got: ${declinedResult.stderr[0]}`
+      declinedResult.thrown?.message.includes('Config present but not loadable:'),
+      `the THROWN error carries the refusal, got: ${declinedResult.thrown?.message}`
     );
     assert.ok(
-      declinedResult.stderr[0]?.includes('ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING'),
+      declinedResult.thrown?.message.includes('ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING'),
       'and names the Node refusal code'
     );
+    assert.notStrictEqual(
+      declinedResult.thrown?.message.replace('f2-declined-mod', 'MOD'),
+      absentResult.thrown?.message.replace('f2-absent-mod', 'MOD'),
+      'and is no longer byte-identical to the no-config case once the module name is normalised'
+    );
     assert.ok(
-      absentResult.stderr[0]?.includes('Config not found:'),
-      `the no-config case logs "not found" instead, so stderr DOES distinguish them, got: ${absentResult.stderr[0]}`
+      absentResult.thrown?.message.includes('and none is installed'),
+      `the no-config case says so instead, got: ${absentResult.thrown?.message}`
     );
 
-    // Fact 2 for #108: the relabel drops the cause chain entirely.
+    // The old message is gone from BOTH arms — it was the false claim #108 was
+    // filed over, and it was false about the file AND about the module.
     assert.notOk(
-      declinedResult.thrown?.hasCause,
-      'the rethrow carries no `cause` — a supervisor loses the original error'
+      declinedResult.thrown?.message.includes('must have a config/environment.js file'),
+      'neither arm still claims a missing config/environment.js'
     );
+    assert.notOk(
+      absentResult.thrown?.message.includes('must have a config/environment.js file'),
+      'including the arm where a config really is absent'
+    );
+
+    // Fact 2 for #108: the diagnosis is now reachable programmatically, and it
+    // is no longer written to a side channel the caller cannot correlate.
+    assert.ok(declinedResult.thrown?.hasCause, 'the rethrow carries a `cause`');
+    assert.ok(
+      declinedResult.thrown?.causeMessage?.includes('Config present but not loadable:'),
+      `and the cause is the loader's own error, got: ${declinedResult.thrown?.causeMessage}`
+    );
+    assert.deepEqual(declinedResult.stderr, [], 'nothing is logged behind the caller any more');
+    assert.deepEqual(absentResult.stderr, [], 'in either arm');
   });
 });
 

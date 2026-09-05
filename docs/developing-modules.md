@@ -52,7 +52,7 @@ export default {
 };
 ```
 
-Stonyx's loader tries `.ts` first, then falls back to `.js`, and that order applies to module configs too — which is exactly why a module must not ship a `.ts` alongside its `.js`: `.ts` would win and then be refused by Node, producing `Config present but not loadable: …` instead of loading the `.js`. Ship the `.js` only. (That precise message is what `importConfig` produces and what reaches **stderr**; the error `loadModules` actually throws is a generic "must have a config/environment.js file" — see [framework module conventions](conventions/framework-modules.md#module-configenvironmentjs-is-always-javascript).)
+Stonyx's loader tries `.ts` first, then falls back to `.js`, and that order applies to module configs too — which is exactly why a module must not ship a `.ts` alongside its `.js`: `.ts` would win and then be refused by Node, producing `Config present but not loadable: …` instead of loading the `.js`. Ship the `.js` only. (That precise message is what `importConfig` produces, and since abofs/stonyx#108 it is carried by the error `loadModules` throws — prefixed with the module's name and with the loader's error as `cause` — see [framework module conventions](conventions/framework-modules.md#module-configenvironmentjs-is-always-javascript).)
 
 User project config is merged on top of these defaults.
 

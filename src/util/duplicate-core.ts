@@ -1,0 +1,213 @@
+/**
+ * Invariant I1 of the Sprint 93 install-and-boot cluster — "one core".
+ *
+ * At `Stonyx.start()`, every discovered module must resolve the SAME physical
+ * `stonyx` package root as the running core. Otherwise the app has two
+ * framework singletons: `loadModules` runs on copy A, and a module whose own
+ * subtree carries copy B registers its config, its Chronicle types and its
+ * lifecycle hooks on B — which nobody ever `start()`ed.
+ *
+ * Why a PRE-FLIGHT and not a better `catch`. The catch only sees modules that
+ * happen to touch `Stonyx.config` at load time and therefore throw
+ * "Stonyx has not been initialized yet". A module that does not touch it at
+ * load time does not throw at all: it loads, it initialises, it reports
+ * success, and its hooks silently never fire. That failure is invisible today,
+ * and no improvement to the catch can reach it. Multiple cores is never a
+ * valid state, so it is detected up front and refused.
+ *
+ * Measured shape this exists for (abofs/stonyx#108, `stonyx new` scaffold at
+ * 0.2.3-beta.96): three distinct copies of the core on disk — `0.2.2`,
+ * `0.2.3-beta.6`, `0.2.3-beta.11` — because five sibling repos pin the core
+ * EXACTLY in their own `dependencies`, and an exact pin cannot dedupe against
+ * a sibling's different exact pin.
+ */
+import { createRequire } from 'node:module';
+import { readFileSync, realpathSync } from 'node:fs';
+import { dirname, join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** A resolved `stonyx` package: where it physically is, and what version. */
+export interface CorePackage {
+  /** Absolute, symlink-resolved package root (the directory holding package.json). */
+  root: string;
+  version: string;
+}
+
+export interface ForeignCore {
+  moduleName: string;
+  moduleCore: CorePackage;
+  runningCore: CorePackage;
+}
+
+/** Symlinks resolved so `/tmp/...` and `/private/tmp/...` — and pnpm's
+ * `node_modules/x -> .pnpm/x@v/node_modules/x` — compare equal. */
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+function readPackageJson(dir: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function asCore(dir: string): CorePackage | null {
+  const pkg = readPackageJson(dir);
+
+  if (!pkg || pkg.name !== 'stonyx') return null;
+
+  return { root: realPath(dir), version: typeof pkg.version === 'string' ? pkg.version : 'unknown' };
+}
+
+/**
+ * The nearest ancestor of `startDir` that OWNS a `package.json`, reported only
+ * if that package is `stonyx`.
+ *
+ * Stops at the first `package.json` rather than at the first one NAMED stonyx:
+ * the first is by definition the package that owns the file, and continuing
+ * past it would walk out of the resolved package and could report an unrelated
+ * ancestor — inside this repo's own worktree, that ancestor is the repo root,
+ * which IS named `stonyx`. That would make every fixture look like a match.
+ */
+function owningCore(startDir: string): CorePackage | null {
+  let dir = realPath(startDir);
+
+  for (;;) {
+    const pkg = readPackageJson(dir);
+
+    if (pkg) return pkg.name === 'stonyx' ? asCore(dir) : null;
+
+    const parent = dirname(dir);
+
+    if (parent === dir) return null;
+
+    dir = parent;
+  }
+}
+
+/** The `stonyx` copy that is executing this code. */
+export function runningCore(): CorePackage | null {
+  return owningCore(dirname(fileURLToPath(import.meta.url)));
+}
+
+/**
+ * The `stonyx` copy a package installed at `moduleDir` would import.
+ *
+ * `require.resolve.paths('stonyx')` gives Node's own `node_modules` walk for a
+ * bare specifier, which ESM and CJS share — and unlike `require.resolve` it
+ * does not consult the target's `exports` map, so a module whose nested core
+ * is present but unbuilt is still detected rather than silently skipped.
+ *
+ * TWO deliberate narrowings:
+ *
+ *  - `moduleDir` is realpath'd FIRST. Under pnpm, `<app>/node_modules/@stonyx/orm`
+ *    is a symlink into `.pnpm/@stonyx+orm@v/node_modules/@stonyx/orm`, and Node
+ *    resolves that symlink before resolving the module's own imports. Walking
+ *    the symlink path instead reads the app's flat `node_modules` and reports
+ *    the running core for every module — the check would pass vacuously on
+ *    exactly the installer `stonyx new` uses.
+ *  - Candidate directories are restricted to genuine ANCESTORS of `moduleDir`.
+ *    `require.resolve.paths` appends the CJS global folders (`NODE_PATH`,
+ *    `~/.node_modules`, the node prefix) after the walk; ESM ignores those
+ *    entirely, so honouring them would invent a "duplicate" from an ambient
+ *    environment variable the real import never consults. This workspace
+ *    exports `NODE_PATH` at a different `stonyx` (abofs/stonyx#107), so that
+ *    false positive is not hypothetical.
+ *
+ * Returns `null` when no copy is reachable at all — "cannot tell", handled as
+ * not-a-duplicate by `findForeignCores`.
+ */
+export function coreSeenBy(moduleDir: string): CorePackage | null {
+  const resolvedModuleDir = realPath(moduleDir);
+  const candidates = createRequire(join(resolvedModuleDir, 'package.json')).resolve.paths('stonyx') ?? [];
+
+  for (const nodeModulesDir of candidates) {
+    const owner = dirname(nodeModulesDir);
+    const isAncestor = resolvedModuleDir === owner || resolvedModuleDir.startsWith(owner.endsWith(sep) ? owner : owner + sep);
+
+    if (!isAncestor) continue;
+
+    const core = asCore(join(nodeModulesDir, 'stonyx'));
+
+    if (core) return core;
+  }
+
+  return null;
+}
+
+/**
+ * Every discovered module that would import a DIFFERENT physical core.
+ *
+ * FAIL DIRECTION — this is the property, not an implementation detail. A
+ * module whose core cannot be resolved, and the case where the running core
+ * cannot identify itself, both report NOTHING. This guard exists to convert a
+ * silent wrong state into a loud one; it must not invent a boot failure out of
+ * an inconclusive probe. Every state it does report has two package roots in
+ * hand and has compared them.
+ */
+export function findForeignCores(modules: { name: string; dir: string }[], core = runningCore()): ForeignCore[] {
+  if (!core) return [];
+
+  const foreign: ForeignCore[] = [];
+
+  for (const { name, dir } of modules) {
+    const moduleCore = coreSeenBy(dir);
+
+    if (!moduleCore || moduleCore.root === core.root) continue;
+
+    foreign.push({ moduleName: name, moduleCore, runningCore: core });
+  }
+
+  return foreign;
+}
+
+/**
+ * The diagnostic. It replaces the message abofs/stonyx#108 was filed over —
+ * `Stonyx modules with async loading must have a config/environment.js file` —
+ * which named a file that was present and correct, and named a module that was
+ * not the one that failed.
+ *
+ * Per `quality.md`, the replacement states what it does NOT cover, because the
+ * message it replaces is exactly the kind of overstated claim that made the
+ * next reader stop checking.
+ */
+export function duplicateCoreMessage(foreign: ForeignCore[]): string {
+  const [ first ] = foreign;
+
+  if (!first) throw new Error('duplicateCoreMessage called with no foreign cores');
+
+  const rows = [
+    `  running core${' '.repeat(Math.max(1, 24 - 'running core'.length))}${first.runningCore.version}  ${first.runningCore.root}`,
+    ...foreign.map(({ moduleName, moduleCore }) => {
+      const label = `seen by "${moduleName}"`;
+      return `  ${label}${' '.repeat(Math.max(1, 24 - label.length))}${moduleCore.version}  ${moduleCore.root}`;
+    }),
+  ];
+
+  const names = foreign.map(({ moduleName }) => `"${moduleName}"`).join(', ');
+  const pins = [ ...new Set(foreign.map(({ moduleCore }) => moduleCore.version)) ];
+
+  return [
+    `Stonyx: ${foreign.length + 1} copies of the framework are installed and this app cannot be served.`,
+    '',
+    ...rows,
+    '',
+    `Config, logging and lifecycle hooks are registered on the running core. ${names} ` +
+    'import a different copy, so for them `Stonyx.config` is empty, `Stonyx.log` throws ' +
+    '"Stonyx has not been initialized yet", and their startup and shutdown hooks never fire.',
+    '',
+    `Fix (module author): ${names} must declare stonyx in devDependencies plus a non-optional ` +
+    'peerDependencies range, never as an exact dependency — @stonyx/discord is the reference shape. ' +
+    `Fix (this app, meanwhile): pin stonyx@${pins[0]} so every copy dedupes to one.`,
+    '',
+    'Scope of this check: it compares physical package ROOTS only. It does not check that the ' +
+    'single surviving copy is a compatible version, and it cannot see a copy dragged in by a ' +
+    'package that is not one of this app\'s declared @stonyx/* modules.',
+  ].join('\n');
+}

@@ -2,6 +2,81 @@
 
 When to use which `@stonyx/*` module. Always check these before reaching for Node built-ins or npm packages.
 
+## A module never declares `stonyx` in `dependencies`
+
+**Rule.** A `@stonyx/*` module declares the core in `devDependencies` — pinned to the
+version it develops and tests against — plus a **non-optional** `peerDependencies`
+range. It never declares `stonyx` in `dependencies`.
+
+**The principle the rule protects.** An application must resolve exactly one copy of
+`stonyx`, because the framework is a singleton: `Stonyx.start()` initialises one core,
+and any module holding a different copy sees an uninitialised framework. A peer range
+is satisfied by the copy the application already resolved; a `dependencies` entry is a
+copy the module brings with it, and two modules pinning two different exact versions
+can never dedupe to one.
+
+`@stonyx/discord` is the reference implementation. From
+`npm view @stonyx/discord@0.1.1-beta.117` on 2026-09-05 — the version, not the tag,
+because the `beta` tags below move several times a day:
+
+```json
+{
+  "devDependencies": { "stonyx": "0.2.3-beta.96" },
+  "peerDependencies": { "stonyx": ">=0.2.3-beta.4" }
+}
+```
+
+Measured on 2026-09-05, one application manifest with `stonyx` at `0.2.3-beta.96` in
+`dependencies`, one module swapped, `pnpm install` each time. Modules are named at the
+version that resolved, since the `@beta` form of the second row stopped reproducing
+within a day of being written:
+
+| module in `devDependencies` | its `stonyx` declaration | distinct cores resolved |
+|---|---|---|
+| `@stonyx/discord@0.1.1-beta.117` | `devDependencies` + non-optional peer | **1** — `0.2.3-beta.96` |
+| `@stonyx/sockets@0.1.1-beta.48` | `dependencies: "0.2.3-beta.62"` | **2** — `0.2.3-beta.62`, `0.2.3-beta.96` |
+| `@stonyx/sockets@0.1.1-beta.49` | `dependencies: "0.2.3-beta.96"` | **1** — `0.2.3-beta.96` |
+
+The last two rows are the same module one publish apart, and they are the point of the
+rule: a `dependencies` declaration dedupes only when its pin happens to equal the
+application's core.
+
+**The peer range must not be optional.** `peerDependenciesMeta.stonyx.optional = true`
+tells the installer the peer may be absent, which turns a missing core from an install
+error into a runtime one. `@stonyx/discord` declares no `peerDependenciesMeta` entry
+for `stonyx`. (Optional peers are appropriate for *other* modules a module can work
+without — `@stonyx/orm` marks `@stonyx/rest-server` optional for exactly that reason —
+never for the core.)
+
+Modules still out of compliance as of 2026-09-05, each declaring `stonyx` in
+`dependencies` at an exact version rather than in `devDependencies` plus a peer range,
+given at the version that resolved:
+
+| module, resolved | its `dependencies.stonyx` |
+|---|---|
+| `@stonyx/cron@0.2.1-beta.132` | `0.2.3-beta.96` |
+| `@stonyx/oauth@0.1.1-beta.197` | `0.2.3-beta.96` |
+| `@stonyx/orm@0.3.2-beta.249` | `0.2.3-beta.96` |
+| `@stonyx/rest-server@0.2.1-beta.133` | `0.2.3-beta.96` |
+| `@stonyx/sockets@0.1.1-beta.49` | `0.2.3-beta.96` |
+
+Tracked in abofs/stonyx#106 and abofs/stonyx#108. Re-derive that column with
+`npm view <pkg>@beta version dependencies.stonyx` rather than trusting it: every one of
+these numbers has moved since it was first written, and four of the five moved on the
+day they were.
+
+**A partial rollout is observable, one module at a time.** Each module's compliance is
+independent, so an application benefits from every module that ships the rule, with no
+wait for the other four. It also benefits, accidentally and temporarily, whenever a
+non-compliant module's pin happens to equal its own core — which is the state of all
+five above, measured 2026-09-05: an application pinning `stonyx@0.2.3-beta.96` resolves
+exactly one core with any of them installed. That is not the rule working. It is the
+rule not being needed this hour, and it reverts the next time the core publishes ahead
+of the modules.
+
+Consumer-side guidance, and the command that counts copies, is in
+[Modules — Version alignment](../modules.md#version-alignment).
+
 ## Module `config/environment.js` is always JavaScript
 
 Every `@stonyx/*` module that exposes default configuration does so through `config/environment.js`. This file is a **consumer contract**, not implementation code.

@@ -1,6 +1,7 @@
 import { confirm, prompt } from '@stonyx/utils/prompt';
 import { createFile, createDirectory, copyFile, fileExists } from '@stonyx/utils/file';
 import { spawn } from 'child_process';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -11,7 +12,7 @@ interface ModuleOption {
   files?: Record<string, () => string>;
 }
 
-const MODULE_OPTIONS: ModuleOption[] = [
+export const MODULE_OPTIONS: ModuleOption[] = [
   {
     question: 'Will this project need a REST server?',
     package: '@stonyx/rest-server',
@@ -58,16 +59,152 @@ export default class DBModel extends Model {
 `;
 }
 
-export function generatePackageJson(name: string, selectedModules: ModuleOption[]): string {
+/**
+ * The npm dist-tag that points at a package's stable release line. Only ever
+ * used as a *release line* selector for `@stonyx/*` modules (see
+ * `releaseTagFor`) -- never as the specifier for the core, which is always
+ * pinned exactly.
+ */
+const STABLE_DIST_TAG = 'latest';
+
+/** Absolute path to this package's own root, from both `src/` and `dist/`. */
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/** A full semver version: `major.minor.patch`, optional prerelease, optional build. */
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/**
+ * A string npm accepts as a *dist-tag* and never reinterprets as a version range.
+ * npm requires a tag to be non-numeric, and `x`/`X` are semver wildcards rather
+ * than tag names, so both are rejected in `releaseTagFor`.
+ */
+const DIST_TAG = /^[A-Za-z][0-9A-Za-z-]*$/;
+
+/**
+ * Rejects any version this generator must not emit.
+ *
+ * `readCoreVersion` used to check only that the field was a non-empty string, so
+ * `"garbage"`, `"0.2"` and `"latest"` all flowed through to the manifest verbatim
+ * and made `releaseTagFor` fall through to `latest` -- the one specifier
+ * abofs/stonyx#113 exists to stop emitting.
+ */
+function assertVersionShape(version: unknown, source: string): asserts version is string {
+  if (typeof version !== 'string' || !version) {
+    throw new Error(`Could not read the stonyx version from ${source}`);
+  }
+
+  if (!SEMVER.test(version)) {
+    throw new Error(`The stonyx version from ${source} is not a semver version: "${version}"`);
+  }
+}
+
+/**
+ * The version of the `stonyx` package running this generator, read from its own
+ * `package.json` at call time.
+ *
+ * Read rather than hardcoded on purpose: a literal would be correct on the day
+ * it was written and silently stale on every day after (abofs/stonyx#113).
+ */
+export function readCoreVersion(): string {
+  const manifest = path.join(packageRoot, 'package.json');
+  const raw = readFileSync(manifest, 'utf8');
+  const version = (JSON.parse(raw) as { version?: unknown }).version;
+
+  assertVersionShape(version, manifest);
+
+  return version;
+}
+
+/**
+ * The npm dist-tag naming the release line a version belongs to:
+ * `0.2.3-beta.96` -> `beta`, `0.2.3-alpha.4` -> `alpha`, `0.2.2` -> `latest`.
+ *
+ * Every scaffolded `@stonyx/*` module is requested on the same line as the core
+ * that scaffolded it, so the generated project cannot mix a prerelease core with
+ * modules from the stable line (or the reverse).
+ *
+ * Throws, rather than guessing, when the prerelease identifier is not usable as a
+ * dist-tag. Returning it verbatim was only safe for *alphabetic* identifiers: npm
+ * parses a numeric or wildcard identifier as a version **range**, so `0.2.3-0`
+ * emitted `"0"` and `0.2.3-x` emitted `"x"`, both of which install with rc=0 and
+ * silently resolve the module's `latest` release -- for `@stonyx/orm` that is
+ * `0.3.1`, which pins `stonyx@0.2.3-beta.11` and so reproduces abofs/stonyx#113
+ * through a different door, with no error. `0.2.3-0` is reachable from this
+ * repo's own `publish.yml` `custom-version` dispatch input, which accepts any
+ * semver string and also expands the keyword `prerelease` to `x.y.z-0`.
+ *
+ * Two bounds remain, both loud rather than silent:
+ *
+ * - An alphabetic identifier is assumed to also be a published dist-tag name.
+ *   True for `beta` and `alpha`, the only two lines the fleet publishes; a core
+ *   released as e.g. `0.2.3-rc.1` with no `rc` dist-tag scaffolds an unresolvable
+ *   module specifier, which fails `pnpm install` with
+ *   `ERR_PNPM_NO_MATCHING_VERSION`. The tag has to exist on every package in
+ *   `MODULE_OPTIONS`, not only on the core.
+ * - On the stable line this returns `latest`, the correct tag for that line -- but
+ *   only useful once the *modules* have advanced their own `latest` tags. Today
+ *   `@stonyx/orm@latest` is `0.3.1` and pins `stonyx@0.2.3-beta.11`, so the module
+ *   `latest` tags must advance before the core's does (abofs/stonyx#115).
+ */
+export function releaseTagFor(version: string): string {
+  // Fail closed, not open. Without this the exported function still answered
+  // `latest` for `"garbage"`, `"0.2"`, `""` and `"latest"` itself -- the same
+  // fall-through-to-`latest` shape this change exists to remove, one level down
+  // from the emission path that `generatePackageJson` already guards.
+  assertVersionShape(version, 'the supplied version');
+
+  const prerelease = /^\d+\.\d+\.\d+-(.*)$/.exec(version);
+
+  if (!prerelease) return STABLE_DIST_TAG;
+
+  const identifier = prerelease[1].split('.')[0];
+
+  if (!DIST_TAG.test(identifier) || /^[xX]$/.test(identifier)) {
+    throw new Error(
+      `Cannot derive a dist-tag from the prerelease identifier "${identifier}" in version "${version}": ` +
+      'npm reads it as a version range, not a tag.'
+    );
+  }
+
+  if (identifier === STABLE_DIST_TAG) {
+    throw new Error(`A prerelease core must not request modules at "${STABLE_DIST_TAG}" (version "${version}").`);
+  }
+
+  return identifier;
+}
+
+export function generatePackageJson(
+  name: string,
+  selectedModules: ModuleOption[],
+  coreVersion: string = readCoreVersion()
+): string {
+  // Resolved first, before anything is emitted, and unconditionally -- deliberately
+  // not inside the module loop below. `releaseTagFor` asserts the version's shape as
+  // its first act, so this one call is also what stops an injected non-semver
+  // `coreVersion` from reaching the manifest verbatim.
+  //
+  // A second `assertVersionShape(coreVersion, ...)` stood at the top of this function
+  // until abofs/stonyx#118's review: deleting it left the suite green, because this
+  // call already rejects the same value on every path. It was removed rather than
+  // left as decoration. The invariant that replaces it is positional -- keep this
+  // call above the emission and the guard stays load-bearing; push it under an
+  // `if (selectedModules.length)` and the core becomes unvalidated again.
+  const moduleTag = releaseTagFor(coreVersion);
+
+  // The framework is a runtime dependency of the application, pinned exactly to
+  // the core that generated the project.
+  const dependencies: Record<string, string> = { stonyx: coreVersion };
+
   const devDependencies: Record<string, string> = {
     qunit: '^2.24.1',
-    stonyx: 'latest',
     tsx: '^4.21.0',
     typescript: '^5.8.3'
   };
 
+  // Modules are discovered from devDependencies (see docs/modules.md), and are
+  // requested on the core's own release line rather than at `latest`.
   for (const mod of selectedModules) {
-    devDependencies[mod.package] = 'latest';
+    devDependencies[mod.package] = moduleTag;
   }
 
   // Sort dependencies alphabetically
@@ -86,6 +223,7 @@ export function generatePackageJson(name: string, selectedModules: ModuleOption[
       start: 'stonyx serve',
       test: "NODE_ENV=test node --import tsx/esm --import ./test/setup.ts node_modules/qunit/bin/qunit.js 'test/**/*-test.ts'"
     },
+    dependencies,
     devDependencies: sorted
   }, null, 2) + '\n';
 }
@@ -215,7 +353,11 @@ export function generateTsConfig(): string {
   }, null, 2) + '\n';
 }
 
-function runPnpmInstall(projectDir: string): Promise<void> {
+/**
+ * Rejects when `pnpm install` fails, either by exiting non-zero or by failing to
+ * spawn. Exported so the rejection path is testable without a network round-trip.
+ */
+export function runPnpmInstall(projectDir: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn('pnpm', ['install'], {
       cwd: projectDir,
@@ -334,7 +476,19 @@ export default async function newCommand({ args }: { args: string[] }): Promise<
   try {
     await runPnpmInstall(projectDir);
   } catch (error) {
-    console.error('Failed to install dependencies. Run `pnpm install` manually in the project directory.');
+    // `pnpm`'s own diagnostic already reached the terminal via stdio: 'inherit'.
+    // What used to be missing is the exit code: this catch discarded `error` and
+    // fell through to the success banner, so `stonyx new` announced success and
+    // exited 0 on a project with no node_modules -- loud to a human, silent to any
+    // supervisor, CI job or wrapper reading the status.
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error(`\n✗ Project "${appName}" was created, but its dependencies are NOT installed.`);
+    console.error(`\n  cd ${appName}`);
+    console.error('  pnpm install\n');
+
+    process.exitCode = 1;
+
+    return;
   }
 
   console.log(`\n✓ Project "${appName}" created successfully!`);

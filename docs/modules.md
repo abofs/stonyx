@@ -2,6 +2,205 @@
 
 Stonyx uses a plug-and-play module architecture. Modules are automatically detected, loaded, and initialized at startup.
 
+## Installing Stonyx in an Application
+
+`stonyx new` generates this shape for you. If you are adding Stonyx to an existing
+project, match it.
+
+- **The core goes in `dependencies`.** `stonyx` is a runtime dependency of the
+  application: the `stonyx` binary runs your app and your `app.ts` imports from it.
+- **`@stonyx/*` modules go in `devDependencies`.** That is where the loader scans
+  (see [How Modules Are Discovered](#how-modules-are-discovered)).
+- **Pin the core to an exact version**, and request every module from the core's own
+  release line. Never `latest` for the core — see [Why not `latest`](#why-not-latest).
+
+A minimal application. This manifest was installed into a fresh directory alongside
+a minimal `app.ts` and `config/environment.ts` and booted on 2026-09-05 — `stonyx
+serve` printed the app's log line and the process exited 0:
+
+```json
+{
+  "name": "my-app",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": { "serve": "stonyx serve" },
+  "dependencies": { "stonyx": "0.2.3-beta.96" }
+}
+```
+
+Use the version of `stonyx` you are actually installing, not the one printed above.
+`npm view stonyx dist-tags` shows the current tip of each release line.
+
+Adding modules keeps the same shape — each module requested at the dist-tag of the
+core's release line, so the whole set stays on one line:
+
+```json
+{
+  "dependencies": { "stonyx": "0.2.3-beta.96" },
+  "devDependencies": { "@stonyx/orm": "beta", "@stonyx/sockets": "beta" }
+}
+```
+
+> Read [Version alignment](#version-alignment) before you add modules. A module that
+> declares its own `stonyx` at a version other than yours puts a second core in the
+> tree; whether that is loud or silent is decided by the module's `stonyx-async`
+> keyword, not by luck.
+>
+> Measured 2026-09-05 against an application pinning `stonyx@0.2.3-beta.96`, one
+> module at a time: every module at `@beta` resolved exactly **one** core, and
+> `@stonyx/cron`, `@stonyx/discord`, `@stonyx/events`, `@stonyx/rest-server` and
+> `@stonyx/sockets` booted. `@stonyx/orm@0.3.2-beta.249` and
+> `@stonyx/oauth@0.1.1-beta.197` exit 1, but on an unsatisfied *sibling* module
+> (`@stonyx/rest-server`), not on a duplicate core — see abofs/stonyx-orm#291. The
+> module `beta` tags move several times a day, so count rather than assume.
+
+### Why not `latest`
+
+Measured 2026-09-05:
+
+- `stonyx@latest` is `0.2.2` while `stonyx@beta` is `0.2.3-beta.96`. `0.2.2` ships no
+  `bin` field, so a project that resolves it has **no `node_modules/.bin/stonyx`** and
+  its own `"serve": "stonyx serve"` script has no binary to run.
+- Each module's `latest` tag points at a release that pins an older core:
+  `@stonyx/sockets@latest` (`0.1.0`) pins `stonyx@0.2.3-beta.6`, and
+  `@stonyx/orm@latest` (`0.3.1`) declares `stonyx@0.2.3-beta.11` directly in its own
+  `dependencies` (its `@stonyx/cron@0.2.1-beta.29` pins the same core, but that is an
+  additional path, not the route).
+
+A manifest asking for `latest` for the core plus `@stonyx/rest-server`,
+`@stonyx/sockets` and `@stonyx/orm` resolved to **three** distinct cores — `0.2.2`,
+`0.2.3-beta.6` and `0.2.3-beta.11` — under stock `pnpm install` with no `.npmrc` and
+no overrides.
+
+Note what this is *not*: `pnpm` resolved the root's own `latest` to `0.2.2`, exactly
+what the tag means. Every extra copy arrived transitively, from a pin inside a
+published module. Pinning the application's core does not remove them.
+
+### Version alignment
+
+An application must resolve exactly **one** copy of `stonyx`. Check it:
+
+```sh
+pnpm why stonyx      # or, under npm:  npm ls stonyx --all
+```
+
+Every `stonyx x.y.z` line in the output must show the same version. For just the
+distinct versions:
+
+```sh
+pnpm why stonyx --json | node -e '
+  let raw = ""; process.stdin.on("data", d => raw += d).on("end", () => {
+    const seen = new Set();
+    const walk = (deps) => { for (const dep of Object.values(deps || {})) {
+      if (dep.from === "stonyx") seen.add(dep.version);
+      walk(dep.dependencies);
+    } };
+    for (const p of JSON.parse(raw)) { walk(p.dependencies); walk(p.devDependencies); walk(p.optionalDependencies); }
+    console.log([...seen].sort().join("\n") || "(no stonyx resolved)");
+  });'
+```
+
+More than one line is this defect.
+
+Three details of that walk are load-bearing, each measured against a tree built to
+break the obvious version of it:
+
+- **Key on `dep.from`, not on the tree key.** The tree key is the *alias*, not the
+  package. A manifest declaring both `"stonyx": "0.2.3-beta.96"` and
+  `"legacy-core": "npm:stonyx@0.2.2"` installs both cores — `ls node_modules/.pnpm`
+  shows `stonyx@0.2.2` and `stonyx@0.2.3-beta.96` — and a walk matching
+  `name === "stonyx"` reports **1**. Matching `dep.from === "stonyx"` reports 2.
+- **Walk `optionalDependencies` too.** `pnpm why --json` emits the project's own
+  `optionalDependencies` as a separate top-level key. A core declared there is missed
+  entirely by a walk that reads only `dependencies` and `devDependencies` — measured
+  reporting **0**. (Transitive optional deps are flattened into `dependencies` and
+  were already counted.)
+- **Say something when nothing is found.** Without the `|| "(no stonyx resolved)"`
+  fallback the miss above prints a single blank line, which reads as "clean" under
+  *more than one line is this defect*. Zero cores and one core are not the same
+  answer, and neither should be silent.
+
+**Do not count directories.** `find node_modules -type d -name stonyx` also matches
+store entries `pnpm` leaves behind from an earlier install — measured reporting two
+versions in a project that resolves exactly one. `pnpm why` walks the resolved graph
+and does not.
+
+**And do not wait for an error.** Whether a second core is loud or silent is
+deterministic, and it follows the module's `stonyx-async` keyword. `loadModules`
+skips the import entirely for a module without it:
+
+```js
+if (!keywords.includes('stonyx-async')) {
+  modulePromises[moduleName].resolve();
+  continue;
+}
+```
+
+- A **sync** module (`keywords: ["stonyx-module"]`) is never imported *by the loader*,
+  so its copy of the core is never loaded there and never complains. **Silent through
+  module discovery — not silent for the application.** The gate above buys silence
+  from `loadModules`; it buys nothing the moment your own code imports the module.
+  Measured on the two-core `@stonyx/cron` tree below, with one line added to `app.js`
+  as the only variable:
+
+  ```js
+  import '@stonyx/cron';
+  ```
+
+  turns exit **0** into exit **1**, `Error: Stonyx has not been initialized yet`,
+  thrown from `.pnpm/stonyx@0.2.3-beta.95/…/dist/main.js:94` — cron's own pin — and
+  arriving through the app-entry import at
+  `.pnpm/stonyx@0.2.3-beta.96/…/dist/cli/serve.js:43`, never through `loadModules` at
+  all. The control without that import is exit 0 on the same tree, same run. A sync
+  module with a skewed pin is silent only while nothing imports it, which is not how
+  modules are used.
+- An **async** module (`keywords: ["stonyx-async", "stonyx-module"]`) is imported, and
+  its `config/environment.js` evaluates against *its own* copy of the core, which
+  nothing initialised. **Always loud** — `stonyx serve` exits 1 with
+  `Error: Stonyx has not been initialized yet`, thrown from the module's copy under
+  `node_modules/.pnpm/stonyx@<the module's pin>/`, relabelled as
+  `Stonyx modules with async loading must have a config/environment.js file with
+  default configurations. Module "<name>" failed to load.` The config file that second
+  message points at is present and correct — the message is wrong about the cause (see
+  abofs/stonyx#108).
+
+Measured 2026-09-05 in a two-file consumer pinning `stonyx@0.2.3-beta.96`. Module
+versions are given resolved rather than as `@beta`, because the `beta` tags move
+several times a day and both of these examples stopped reproducing at `@beta` within a
+day of being written:
+
+The first two rows use an `app.js` that does not import the module; the third row is
+that same cron tree with the one-line import added.
+
+| module, resolved | keywords | cores | `stonyx serve` |
+|---|---|---|---|
+| `@stonyx/cron@0.2.1-beta.131` (pins `0.2.3-beta.95`) | `stonyx-module` | 2 | booted, exit **0**, no warning |
+| `@stonyx/sockets@0.1.1-beta.48` (pins `0.2.3-beta.62`) | `stonyx-async`, `stonyx-module` | 2 | exit **1** |
+| the same cron tree, `app.js` importing `@stonyx/cron` | `stonyx-module` | 2 | exit **1** |
+
+The keyword is the only variable, verified in both directions on those same two trees:
+deleting `stonyx-async` from the installed `@stonyx/sockets@0.1.1-beta.48` makes its
+two-core tree boot and exit 0, and adding `stonyx-async` to the installed
+`@stonyx/cron@0.2.1-beta.131` makes its two-core tree exit 1.
+
+Absence of an error is not evidence of a single core. Count.
+
+> **Known issue (2026-09-05).** Five modules — `@stonyx/cron`, `@stonyx/oauth`,
+> `@stonyx/orm`, `@stonyx/rest-server` and `@stonyx/sockets` — declare `stonyx` in
+> their own `dependencies` at an exact version rather than `devDependencies` plus a
+> peer range. Whether that adds a second core depends entirely on what the application
+> declares: a module pin equal to the application's core dedupes to one, and a pin at
+> any other version does not. Measured 2026-09-05, all five resolved
+> `stonyx@0.2.3-beta.96` on their `beta` tag and deduped onto an application pinning
+> the same, while `@stonyx/sockets@0.1.1-beta.48` — the `beta` tag the day before —
+> pinned `0.2.3-beta.62` and resolved two. The declaration is still wrong: it makes
+> deduping a coincidence of release timing rather than a property of the manifest.
+> `@stonyx/discord` is the one module with the correct shape (see
+> [Framework Modules](conventions/framework-modules.md#a-module-never-declares-stonyx-in-dependencies)).
+> Tracked in abofs/stonyx#108 and abofs/stonyx#106; the fix is in the modules, not in
+> your application.
+
 ## How Modules Are Discovered
 
 Stonyx scans your project's `devDependencies` for packages prefixed with `@stonyx/`. Each matching package must include the `stonyx-module` keyword in its `package.json` to be loaded.

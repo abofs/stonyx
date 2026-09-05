@@ -2,7 +2,10 @@ import QUnit from 'qunit';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { PassThrough } from 'stream';
+import { fileURLToPath } from 'url';
 import newCommand, {
+  runPnpmInstall,
   scaffoldProject,
   generateAppTs,
   generateTsConfig,
@@ -229,4 +232,396 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// abofs/stonyx#113 — what the scaffold emits as dependency specifiers.
+//
+// Scaffolded consumers must land on a predictable core version and a coherent
+// module set. Every test below is scaffolded as QUnit.todo: it must FAIL while
+// the generator still emits "latest", and QUnit hard-fails a todo that starts
+// passing, which forces the conversion to `test` when the fix lands.
+// ---------------------------------------------------------------------------
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(testDir, '../../..');
+
+async function readOwnVersion(): Promise<string> {
+  const raw = await fs.readFile(path.join(repoRoot, 'package.json'), 'utf8');
+  return JSON.parse(raw).version as string;
+}
+
+QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function () {
+  QUnit.test('emits the core at the generator\'s own exact version, read from package.json', async function (assert) {
+    const pkg = JSON.parse(generatePackageJson('test-app', []));
+    const own = await readOwnVersion();
+
+    assert.strictEqual(coreSpecifier(pkg), own, 'core specifier equals the generator\'s own version');
+  });
+
+  QUnit.test('emits the core as an exact version, never a tag or a range', async function (assert) {
+    const pkg = JSON.parse(generatePackageJson('test-app', []));
+
+    assert.ok(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(coreSpecifier(pkg) ?? ''), 'core specifier is an exact semver');
+  });
+
+  QUnit.test('declares the core in dependencies, not devDependencies', async function (assert) {
+    const pkg = JSON.parse(generatePackageJson('test-app', []));
+
+    assert.ok(pkg.dependencies && pkg.dependencies.stonyx, 'stonyx is in dependencies');
+    assert.notOk(pkg.devDependencies.stonyx, 'stonyx is not in devDependencies');
+  });
+
+  // Pinned to expected literals, not to `releaseTagFor`. Comparing the emitted
+  // specifier against the same function the emitter used made this test unable to
+  // fail: replacing `releaseTagFor`'s body with a constant left it green. Three
+  // injected release lines mean no constant can satisfy it.
+  QUnit.test('emits every MODULE_OPTIONS package on the core\'s release line', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const options = mod.MODULE_OPTIONS as { package: string }[];
+    const modules = options as Parameters<typeof generatePackageJson>[1];
+
+    const expectations: [string, string][] = [
+      ['0.2.3-beta.96', 'beta'],
+      ['0.2.3-alpha.50', 'alpha'],
+      ['0.2.3', 'latest']
+    ];
+
+    for (const [coreVersion, expectedTag] of expectations) {
+      const pkg = JSON.parse(generatePackageJson('test-app', modules, coreVersion));
+
+      for (const option of options) {
+        assert.strictEqual(
+          pkg.devDependencies[option.package], expectedTag,
+          `core ${coreVersion}: ${option.package} is requested at "${expectedTag}"`
+        );
+      }
+    }
+
+    // And every option really is emitted, so the loop above cannot pass vacuously.
+    const emitted = JSON.parse(generatePackageJson('test-app', modules, '0.2.3-beta.96'));
+    assert.strictEqual(
+      options.filter(o => emitted.devDependencies[o.package]).length, options.length,
+      'every MODULE_OPTIONS package appears in devDependencies'
+    );
+  });
+
+  // Reconciles the old `emits no dependency at "latest"` guard with the stable
+  // branch of `releaseTagFor`, which the guard contradicted by design: the guard
+  // forbade `latest` unconditionally while `releaseTagFor` returns `latest` for a
+  // stable core, so `dev` would have gone red on the first stable release.
+  //
+  // The decision: `latest` is the correct *module* dist-tag on the stable line, so
+  // `releaseTagFor` is right and the guard was wrong. What must never float is the
+  // *core*, which is the abofs/stonyx#113 invariant. Both halves are asserted over
+  // injected versions rather than the repo's own, so neither goes vacuous or flips
+  // when this package cuts its first stable release.
+  QUnit.test('never emits the core at a floating tag, on any release line', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const modules = mod.MODULE_OPTIONS as Parameters<typeof generatePackageJson>[1];
+
+    for (const coreVersion of ['0.2.3-beta.96', '0.2.3-alpha.50', '0.2.3', await readOwnVersion()]) {
+      const pkg = JSON.parse(generatePackageJson('test-app', modules, coreVersion));
+
+      assert.strictEqual(coreSpecifier(pkg), coreVersion, `core ${coreVersion} is pinned exactly`);
+      assert.notStrictEqual(coreSpecifier(pkg), 'latest', `core ${coreVersion} is not "latest"`);
+    }
+  });
+
+  QUnit.test('emits no module at "latest" while the core is on a prerelease line', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const options = mod.MODULE_OPTIONS as { package: string }[];
+    const modules = options as Parameters<typeof generatePackageJson>[1];
+
+    for (const coreVersion of ['0.2.3-beta.96', '0.2.3-alpha.50']) {
+      const pkg = JSON.parse(generatePackageJson('test-app', modules, coreVersion));
+
+      for (const [name, spec] of Object.entries({ ...(pkg.dependencies ?? {}), ...pkg.devDependencies })) {
+        assert.notStrictEqual(spec, 'latest', `core ${coreVersion}: ${name} is not specified as "latest"`);
+      }
+    }
+  });
+
+  // READ THIS BEFORE TREATING GREEN AS SAFE.
+  //
+  // This test *asserts* `latest`, it does not merely stop forbidding it, and that is
+  // correct only under a precondition this suite cannot check. `latest` is the right
+  // *module* dist-tag for a stable core -- but only while each module's own `latest`
+  // release is built against a stable core. That is false today:
+  // `@stonyx/orm@latest` is `0.3.1` and pins `stonyx@0.2.3-beta.11`, so a stable core
+  // scaffolded right now would reproduce abofs/stonyx#113 through the *module* path
+  // with this test still green.
+  //
+  // The branch is unreachable today only because the stable core (`0.2.2`) ships no
+  // `bin`. It goes live the moment abofs/stonyx#115 advances `latest`, and #115 now
+  // carries the constraint that makes this safe: the advance must cover the **module**
+  // dist-tags, not only the core's, verified from a scaffolded consumer by counting
+  // resolved cores. Nothing here can enforce that -- it is a release precondition, not
+  // a property of the generator -- so it is named in every assertion message below.
+  QUnit.test('on the stable line, modules are requested at "latest" by design', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const options = mod.MODULE_OPTIONS as { package: string }[];
+    const pkg = JSON.parse(generatePackageJson('test-app', options as Parameters<typeof generatePackageJson>[1], '0.2.3'));
+
+    assert.strictEqual(
+      coreSpecifier(pkg), '0.2.3',
+      'the core is still pinned exactly -- the #113 invariant, and what makes the module tag survivable'
+    );
+
+    for (const option of options) {
+      assert.strictEqual(
+        pkg.devDependencies[option.package], 'latest',
+        `${option.package} at "latest" on the stable line -- correct only once that tag points at a release ` +
+        'built against a stable core; abofs/stonyx#115 must advance the module dist-tags, not only the core\'s'
+      );
+    }
+  });
+
+  QUnit.test('releaseTagFor maps a version to its own release line', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const releaseTagFor = mod.releaseTagFor as (v: string) => string;
+
+    assert.strictEqual(releaseTagFor('0.2.3-beta.96'), 'beta', 'beta prerelease -> beta tag');
+    assert.strictEqual(releaseTagFor('0.2.3-alpha.49'), 'alpha', 'alpha prerelease -> alpha tag');
+    assert.strictEqual(releaseTagFor('0.2.2'), 'latest', 'stable version -> latest tag');
+    assert.strictEqual(releaseTagFor('0.2.3-rc.1'), 'rc', 'rc prerelease -> rc tag (unpublished, but a valid tag name)');
+    assert.strictEqual(releaseTagFor('1.0.0-alpha.beta.1'), 'alpha', 'only the first identifier names the line');
+    assert.strictEqual(releaseTagFor('0.2.3+build.5'), 'latest', 'build metadata is not a prerelease');
+  });
+
+  // npm parses a numeric or wildcard prerelease identifier as a version *range*,
+  // not a dist-tag: `0.2.3-0` emitted `"0"`, which installs with rc=0 and silently
+  // resolves `@stonyx/orm@0.3.1` -- the release that pins `stonyx@0.2.3-beta.11`.
+  // `0.2.3-0` is reachable from this repo's own `publish.yml` dispatch input.
+  QUnit.test('releaseTagFor refuses identifiers npm reads as a version range', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const releaseTagFor = mod.releaseTagFor as (v: string) => string;
+
+    for (const version of ['0.2.3-0', '0.2.3-1.2', '0.2.3-x', '0.2.3-X']) {
+      assert.throws(() => releaseTagFor(version), /not a tag/, `${version} throws rather than emitting a range`);
+    }
+
+    assert.throws(() => releaseTagFor('0.2.3-latest'), /must not request modules at "latest"/,
+      'a prerelease core can never reach the stable dist-tag');
+  });
+
+  // `readCoreVersion` used to accept any non-empty string, so "garbage", "0.2" and
+  // "latest" reached the manifest verbatim and fell through to the `latest` tag.
+  QUnit.test('a non-semver core version is refused, not emitted', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const modules = mod.MODULE_OPTIONS as Parameters<typeof generatePackageJson>[1];
+
+    const releaseTagFor = mod.releaseTagFor as (v: string) => string;
+
+    for (const version of ['garbage', '0.2', '0.2.3.4', 'latest', 'v0.2.3-beta.1', '']) {
+      assert.throws(
+        () => generatePackageJson('test-app', modules, version), /not a semver version|Could not read/,
+        `"${version}" is refused by the emission path`
+      );
+
+      // ...and with nothing selected. `generatePackageJson` has no version check of
+      // its own -- it validates by calling `releaseTagFor` unconditionally -- so the
+      // guard is only as unconditional as that call site. Making it conditional on
+      // `selectedModules.length` would emit an unvalidated core for an empty
+      // selection, which is the same guard-that-does-not-run shape one scope down.
+      assert.throws(
+        () => generatePackageJson('test-app', [], version), /not a semver version|Could not read/,
+        `"${version}" is refused with no modules selected`
+      );
+
+      // And by the exported mapping itself, which otherwise answered "latest".
+      assert.throws(
+        () => releaseTagFor(version), /not a semver version|Could not read/,
+        `"${version}" is refused by releaseTagFor`
+      );
+    }
+
+    assert.strictEqual(
+      JSON.parse(generatePackageJson('test-app', modules, '0.2.3-beta.96')).dependencies.stonyx, '0.2.3-beta.96',
+      'a well-formed version still passes'
+    );
+  });
+});
+
+// `stonyx new` used to catch a failed install, discard the error and print
+// `✓ Project "..." created successfully!` before exiting 0, so nothing reading the
+// status could tell a scaffolded-and-installed project from a scaffolded-and-broken
+// one. The catch now propagates. `runPnpmInstall` is the rejection it relies on;
+// both failure modes below are offline and complete in tens of milliseconds.
+QUnit.module('[Unit] CLI New — failed install is not a success (#113)', function (hooks) {
+  let tempDir: string;
+
+  hooks.beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stonyx-new-install-'));
+  });
+
+  hooks.afterEach(async function () {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  QUnit.test('runPnpmInstall rejects when pnpm exits non-zero', async function (assert) {
+    await fs.writeFile(path.join(tempDir, 'package.json'), '{ this is not json', 'utf8');
+
+    let rejected = false;
+    let message = '';
+
+    try {
+      await runPnpmInstall(tempDir);
+    } catch (error) {
+      rejected = true;
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    assert.true(rejected, 'a non-zero pnpm exit rejects rather than resolving');
+    assert.true(/exited with code/.test(message), `the exit code is carried in the error (got: ${message})`);
+  });
+
+  QUnit.test('runPnpmInstall rejects when pnpm cannot be spawned', async function (assert) {
+    let rejected = false;
+
+    try {
+      await runPnpmInstall(path.join(tempDir, 'no', 'such', 'directory'));
+    } catch {
+      rejected = true;
+    }
+
+    assert.true(rejected, 'a spawn failure rejects rather than resolving');
+  });
+
+  // The propagation itself -- the whole point of the change -- was reported as
+  // needing an injectable installer and left uncovered. It does not. `runPnpmInstall`
+  // calls `spawn('pnpm', ...)` with no `env` option, so the child inherits
+  // `process.env` at spawn time and resolves `pnpm` from `PATH`: prepending a
+  // directory holding a two-line `pnpm` gives a deterministic, offline, sub-second
+  // install failure through the real code path, with no source change. `args[0]`
+  // supplies the project name so `prompt()` is skipped, and `confirm()` only checks
+  // `process.stdin.isTTY`, so a `PassThrough` with the flag forced drives the
+  // module loop.
+  QUnit.test('a failed install exits non-zero and prints no success banner', async function (assert) {
+    const { exitCode, output } = await runNewHeadless(tempDir, 1);
+
+    assert.strictEqual(exitCode, 1, 'process.exitCode is 1 after a failed install');
+    assert.false(output.includes('created successfully'), 'the success banner is not printed');
+    assert.true(output.includes('dependencies are NOT installed'), 'the failure is stated on stderr');
+    assert.true(
+      await fileExists(path.join(tempDir, 'work', 'my-app', 'package.json')),
+      'the project is still scaffolded -- the non-zero code reports the install, not the scaffold'
+    );
+  });
+
+  // Control for the test above: it proves the harness actually reaches the install
+  // step and can observe both outcomes, so a green failure-arm cannot be an artefact
+  // of the command erroring out earlier.
+  QUnit.test('a successful install leaves the exit code alone and prints the success banner', async function (assert) {
+    const { exitCode, output } = await runNewHeadless(tempDir, 0);
+
+    assert.strictEqual(exitCode, undefined, 'nothing sets a failure code on the success path');
+    assert.true(output.includes('created successfully'), 'the success banner is printed');
+  });
+
+  /**
+   * Runs the real `newCommand` end-to-end and headless, with a fake `pnpm` on `PATH`
+   * that exits `pnpmExitCode`. Everything it mutates on `process` -- `PATH`, `stdin`,
+   * `cwd`, `exitCode`, and the two output streams -- is restored in `finally`.
+   */
+  async function runNewHeadless(
+    dir: string,
+    pnpmExitCode: number
+  ): Promise<{ exitCode: number | string | undefined; output: string }> {
+    const binDir = path.join(dir, 'fake-bin');
+    const workDir = path.join(dir, 'work');
+
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, 'pnpm'), `#!/bin/sh\nexit ${pnpmExitCode}\n`, { mode: 0o755 });
+
+    const originalPath = process.env.PATH;
+    const originalCwd = process.cwd();
+    const originalExitCode = process.exitCode;
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, 'stdin')!;
+    const stdoutWrite = process.stdout.write;
+    const stderrWrite = process.stderr.write;
+
+    const fakeStdin = new PassThrough() as PassThrough & { isTTY?: boolean };
+    fakeStdin.isTTY = true;
+
+    // Answered repeatedly rather than once: each `confirm()` opens its own readline
+    // over this stream, so an answer written between two interfaces is simply resent.
+    const answering = setInterval(() => fakeStdin.write('n\n'), 5);
+
+    let output = '';
+
+    try {
+      process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ''}`;
+      Object.defineProperty(process, 'stdin', { value: fakeStdin, configurable: true });
+      process.stdout.write = ((chunk: unknown) => { output += String(chunk); return true; }) as typeof process.stdout.write;
+      process.stderr.write = ((chunk: unknown) => { output += String(chunk); return true; }) as typeof process.stderr.write;
+      process.chdir(workDir);
+      process.exitCode = undefined;
+
+      let timer: NodeJS.Timeout;
+      const guard = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('newCommand did not settle within 30s')), 30_000);
+      });
+
+      try {
+        await Promise.race([newCommand({ args: ['my-app'] }), guard]);
+      } finally {
+        clearTimeout(timer!);
+      }
+
+      return { exitCode: process.exitCode, output };
+    } finally {
+      clearInterval(answering);
+      process.stdout.write = stdoutWrite;
+      process.stderr.write = stderrWrite;
+      process.chdir(originalCwd);
+      Object.defineProperty(process, 'stdin', stdinDescriptor);
+      process.env.PATH = originalPath;
+      process.exitCode = originalExitCode;
+      fakeStdin.destroy();
+    }
+  }
+});
+
+QUnit.module('[Unit] CLI New — scaffolded manifest on disk (#113)', function (hooks) {
+  let tempDir: string;
+  let projectDir: string;
+
+  hooks.beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stonyx-new-113-'));
+    projectDir = path.join(tempDir, 'sample-app');
+    await scaffoldProject(projectDir, 'sample-app', []);
+  });
+
+  hooks.afterEach(async function () {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  QUnit.test('the written package.json pins the core at the generator\'s own version', async function (assert) {
+    const pkg = JSON.parse(await fs.readFile(path.join(projectDir, 'package.json'), 'utf8'));
+    const own = await readOwnVersion();
+
+    assert.strictEqual(coreSpecifier(pkg), own, 'written manifest pins the running core exactly');
+  });
+});
+
+QUnit.module('[Unit] CLI New — built artifact (#113)', function () {
+  // Consumers run dist/cli/new.js, not src/cli/new.ts. `readCoreVersion` resolves
+  // this package's root relative to its own file, so the two layouts have to be
+  // checked separately: a correct src path can still be wrong once compiled.
+  QUnit.test('dist/cli/new.js reads the same core version as the source', async function (assert) {
+    const built = await import(path.join(repoRoot, 'dist/cli/new.js')) as Record<string, unknown>;
+    const readCoreVersion = built.readCoreVersion as () => string;
+    const own = await readOwnVersion();
+
+    assert.strictEqual(readCoreVersion(), own, 'built generator reads its own package.json');
+
+    const generate = built.generatePackageJson as (n: string, m: unknown[]) => string;
+    assert.strictEqual(coreSpecifier(JSON.parse(generate('test-app', []))), own, 'built generator emits it');
+  });
+});
+
+function coreSpecifier(pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }): string | undefined {
+  return pkg.dependencies?.stonyx ?? pkg.devDependencies?.stonyx;
 }

@@ -19,7 +19,7 @@ stonyx <command> [...args]
 
 ### new
 
-Scaffolds a new Stonyx project in the current directory. Prompts for a project name and which modules to include, then generates the project structure and runs `pnpm install`.
+Scaffolds a new Stonyx project in the current directory. Prompts for a project name and which modules to include, then generates the project structure and runs `pnpm install`. **A failed install is reported through the exit code** — see [Exit codes](#exit-codes) below.
 
 ```bash
 stonyx new              # Prompts for project name
@@ -27,6 +27,58 @@ stonyx new my-app       # Creates my-app/ in the current directory
 ```
 
 Scaffolded projects are TypeScript-first: every consumer-authored source file is `.ts`, with a root `tsconfig.json`, and `tsx`/`typescript` in `devDependencies`.
+
+#### Exit codes
+
+The status code distinguishes a scaffolded-and-installed project from a
+scaffolded-but-broken one, which is what a CI job, supervisor or wrapper reads.
+Measured 2026-09-05 against `stonyx@0.2.3-beta.96`, driving the real command (the
+install arms with a stub `pnpm` on `PATH` so the outcome is deterministic and offline):
+
+| condition | exit | left on disk | printed |
+|---|---|---|---|
+| `pnpm install` exits 0 | **0** | project directory, dependencies installed | `✓ Project "<name>" created successfully!` |
+| `pnpm install` fails | **1** | project directory **without `node_modules`** | `✗ Project "<name>" was created, but its dependencies are NOT installed.` |
+| target directory already exists | **1** | nothing written | `Directory "<name>" already exists.` |
+| no project name given and none entered | **1** | nothing written | `Project name is required.` |
+| stdin is not a TTY | **1** | nothing written | the `confirm()` error quoted below |
+
+Two consequences worth stating plainly:
+
+- **A failed install is not rolled back.** The project directory and its
+  `package.json` remain, so `cd <name> && pnpm install` resumes it rather than
+  requiring a re-scaffold. Do not treat exit 1 as "nothing happened" — check whether
+  the directory exists before retrying `stonyx new`, which refuses an existing one.
+- **Exit 1 is not specific to the install.** Every failure above shares it. Scripts
+  that need to tell them apart should test for the project directory, not parse the
+  message.
+
+Until 2026-09-05 the failed-install case printed the *success* banner and exited **0**
+(abofs/stonyx#113), so a pipeline gated only on the status of `stonyx new` would have
+continued into a project with no dependencies.
+
+**`stonyx new` requires a TTY on stdin.** The module questions are interactive and
+there is no non-interactive mode. With stdin piped or closed it exits 1 before creating
+anything (measured 2026-09-05: `$PWD` empty afterwards, both `< /dev/null` and piped),
+with the full message
+
+```
+Error: Interactive confirm() requires a TTY on stdin. For headless/container deployments, use the autoMigrate config option instead.
+```
+
+The second sentence comes from `@stonyx/utils`' shared `confirm()` and **does not apply
+to `stonyx new`** — `autoMigrate` is an ORM option and there is no such escape here.
+Automated harnesses must drive the command under a pty (for example `expect`); a
+`--yes` / `--modules=` flag is not yet filed as its own issue.
+
+**What the generated manifest declares.** The core is written to `dependencies`,
+pinned to the exact version of the `stonyx` package that ran the command, and every
+selected `@stonyx/*` module is written to `devDependencies` at the dist-tag of that
+core's release line — `beta` from a `0.2.3-beta.n` core, `latest` from a stable one.
+Neither the core nor any module is scaffolded at a floating `latest` while the core is
+on a prerelease line; see
+[Modules — Why not `latest`](modules.md#why-not-latest) for the measurement behind
+that choice.
 
 Generated layout (minimal — additional directories appear per the modules you select):
 

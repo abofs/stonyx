@@ -27,6 +27,7 @@ import { assertDistIsFresh } from '../helpers/dist-freshness.js';
 import {
   coreSeenBy,
   duplicateCoreMessage,
+  esmNodeModulesWalk,
   findForeignCores,
   owningCore,
   runningCore,
@@ -484,6 +485,48 @@ module('[Unit] duplicate-core detector', function(hooks) {
     );
     assert.strictEqual(coreSeenBy(moduleDir)?.root, runningCore()?.root, 'and neither does coreSeenBy');
     assert.deepEqual(findForeignCores(modules), [], 'so a single-core app is not refused over a directory node never consults');
+  });
+
+  // D21 — the exported walk's OWN output, asserted lexically and in full.
+  //
+  // D17/D18/D19 reach `esmNodeModulesWalk` only through `coreSeenBy`, and they
+  // reach it only where a fixture is planted. That leaves the last clause of
+  // the generator unguarded: DROPPING THE ROOT EMISSION — returning before
+  // `join(dir, 'node_modules')` for the filesystem root — passes all 178 of
+  // them, because no test plants a core at `/node_modules` and none can, since
+  // that needs a write to `/`.
+  //
+  // So the guard is lexical rather than behavioural: it asserts the SEQUENCE
+  // the function returns, which is checkable for the root candidate without
+  // creating it. Node v24.13.0 does stat `/node_modules/stonyx` before
+  // terminating — `getPackageJSONURL` exits on the length equality that the
+  // root iteration produces, after that probe, not before it — so the emission
+  // is Node's behaviour and this pins it rather than proposing it.
+  //
+  // Pure path arithmetic: `esmNodeModulesWalk` touches no filesystem, so a
+  // synthetic `fromDir` gives an expectation that does not move with the depth
+  // of the temp directory. This one is the shape the whole cluster is about —
+  // a scoped module inside an app's `node_modules` — so the sequence also
+  // carries the no-skip property D17 covers behaviourally (`.../node_modules/
+  // @stonyx/node_modules` and `<app>/node_modules/node_modules` are both
+  // present, and the CJS walk emits neither).
+  test('D21: the walk emits <d>/node_modules for every ancestor-or-self d, root included, in order', function(assert) {
+    assert.deepEqual(
+      esmNodeModulesWalk('/app/node_modules/@stonyx/d21-mod'),
+      [
+        '/app/node_modules/@stonyx/d21-mod/node_modules',
+        '/app/node_modules/@stonyx/node_modules',
+        '/app/node_modules/node_modules',
+        '/app/node_modules',
+        '/node_modules',
+      ],
+      'ancestor-or-self, self first, no skip over node_modules, terminating with the filesystem root'
+    );
+
+    // The root emission alone, stated separately so a failure names it: from
+    // `/` the walk is exactly one entry, and a generator that returns before
+    // emitting at the root returns none.
+    assert.deepEqual(esmNodeModulesWalk('/'), [ '/node_modules' ], 'and the filesystem root itself emits its own candidate');
   });
 
   // D10 — the fail-opens are SILENT, which is the half of the disclosure that

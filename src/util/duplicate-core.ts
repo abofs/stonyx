@@ -89,10 +89,13 @@ const IGNORE: InconclusiveReporter = () => {};
  * mode rather than screening for it — nothing here reads the environment, so
  * there is no list to get the screen wrong on.
  *
- * TOO NARROW, and this one was a SILENT MISS. `require.resolve.paths` is
- * `Module._nodeModulePaths`, which never descends into a directory already
- * named `node_modules`. **ESM's PACKAGE_RESOLVE has no such skip.** Measured
- * with no `NODE_PATH` at all, from a module at `<app>/node_modules/@stonyx/x`:
+ * TOO NARROW, and this one was a SILENT MISS. WHICH CJS ENUMERATION IS MEANT
+ * IS PART OF THE CLAIM, because the two are not the same set: the walk PROPER
+ * is `Module._nodeModulePaths`, and `require.resolve.paths` is that walk
+ * FOLLOWED BY the global folders of the paragraph above. It is the walk proper
+ * that never descends into a directory already named `node_modules`. **ESM's
+ * PACKAGE_RESOLVE has no such skip.** Measured with no `NODE_PATH` at all,
+ * from a module at `<app>/node_modules/@stonyx/x`:
  *
  *   import.meta.resolve('stonyx') -> <app>/node_modules/node_modules/stonyx/main.js
  *   await import('stonyx')        -> that copy
@@ -105,6 +108,18 @@ const IGNORE: InconclusiveReporter = () => {};
  * reports success, and its hooks silently never fire") surviving the check
  * written to catch it. Isolating control, moving nothing but the directory: the
  * same core at `<app>/node_modules/@stonyx/x/node_modules/stonyx` was REFUSED.
+ *
+ * THE SET DELTA, both directions and named per enumeration — node v24.13.0,
+ * from that same module dir. Against the WALK PROPER the difference is one
+ * directory and it is one-sided: `esm \ Module._nodeModulePaths` = exactly
+ * `<app>/node_modules/node_modules` (the miss above), and
+ * `Module._nodeModulePaths \ esm` = `[]`. Against `require.resolve.paths` the
+ * second direction is NOT empty and never was: `require.resolve.paths \ esm` =
+ * the three global folders (measured here: `~/.node_modules`,
+ * `~/.node_libraries` and the node prefix, all three absent on disk) PLUS one
+ * entry per `NODE_PATH` component, four more as this workspace exports it. That tail IS the "too wide" defect above, measured rather than
+ * argued, and it is why an unqualified "the CJS candidates are the same" is
+ * true of one enumeration and false of the other.
  *
  * BOUNDED BY ANCESTRY, not by a rule. `<app>/node_modules/node_modules` is a
  * candidate because `<app>/node_modules` is an ancestor of the module dir; two

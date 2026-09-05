@@ -325,6 +325,22 @@ QUnit.module('[Unit] CLI New — scaffolded manifest on disk (#113)', function (
   });
 });
 
+QUnit.module('[Unit] CLI New — built artifact (#113)', function () {
+  // Consumers run dist/cli/new.js, not src/cli/new.ts. `readCoreVersion` resolves
+  // this package's root relative to its own file, so the two layouts have to be
+  // checked separately: a correct src path can still be wrong once compiled.
+  QUnit.test('dist/cli/new.js reads the same core version as the source', async function (assert) {
+    const built = await import(path.join(repoRoot, 'dist/cli/new.js')) as Record<string, unknown>;
+    const readCoreVersion = built.readCoreVersion as () => string;
+    const own = await readOwnVersion();
+
+    assert.strictEqual(readCoreVersion(), own, 'built generator reads its own package.json');
+
+    const generate = built.generatePackageJson as (n: string, m: unknown[]) => string;
+    assert.strictEqual(coreSpecifier(JSON.parse(generate('test-app', []))), own, 'built generator emits it');
+  });
+});
+
 function coreSpecifier(pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }): string | undefined {
   return pkg.dependencies?.stonyx ?? pkg.devDependencies?.stonyx;
 }

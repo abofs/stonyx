@@ -95,6 +95,11 @@ export function readCoreVersion(): string {
  * Every scaffolded `@stonyx/*` module is requested on the same line as the core
  * that scaffolded it, so the generated project cannot mix a prerelease core with
  * modules from the stable line (or the reverse).
+ *
+ * Bound: this assumes a prerelease identifier is also a published dist-tag name.
+ * True for `beta` and `alpha`, which are the only two lines the fleet publishes.
+ * A core released as e.g. `0.2.3-rc.1` with no `rc` dist-tag would scaffold an
+ * unresolvable module specifier -- loudly, at install, not silently.
  */
 export function releaseTagFor(version: string): string {
   const prerelease = /^\d+\.\d+\.\d+-([0-9A-Za-z-]+)(?:\.|$)/.exec(version);

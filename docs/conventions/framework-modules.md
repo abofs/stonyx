@@ -6,9 +6,9 @@ When to use which `@stonyx/*` module. Always check these before reaching for Nod
 
 Every `@stonyx/*` module that exposes default configuration does so through `config/environment.js`. This file is a **consumer contract**, not implementation code.
 
-- Consuming projects are pure JavaScript.
-- Node's type-strip loader refuses to process `.ts` files inside `node_modules`, so shipping a `.ts` config crashes every consumer at load time.
-- Stonyx's module loader (`src/util/import-config.ts`) therefore resolves `config/environment.js` only. If the `.js` file is missing, the loader throws `Config not found: …/config/environment.js` — there is no `.ts` fallback.
+- Node's type-strip loader refuses to process `.ts` files inside `node_modules`, so a module shipping a `.ts` config cannot be loaded by any consumer, whatever the loader supports.
+- This is a **runtime** constraint, not a loader one. `importConfig` resolves `config/environment.ts` then `config/environment.js` for *any* base path (see [Configuration](../configuration.md#environment-config)); it is Node that refuses the file once it sits under `node_modules`.
+- A module that ships `config/environment.ts` therefore fails with `Config present but not loadable: …/config/environment.ts exists, but this Node runtime refused to load it (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING)`. It is reported loudly and never as a missing config (abofs/stonyx#105).
 
 TS-migration PRs in `@stonyx/*` modules **must** skip `config/environment.*` — leave it as `.js`. If you find a module shipping `config/environment.ts`, that is a P0 consumer crash; rename it back to `.js` immediately.
 

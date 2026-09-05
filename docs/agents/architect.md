@@ -25,10 +25,10 @@
 ## Architecture Patterns
 
 - **Singleton framework instance:** `Stonyx` class enforces a single instance via constructor guard; exposes static `log`, `config`, and `ready` accessors
-- **Async module loader:** Scans `devDependencies` for `@stonyx/*` packages, filters by `stonyx-module` / `stonyx-async` keywords, imports each module's `config/environment.js` defaults, merges with user config, then calls `init()` concurrently
+- **Async module loader:** Scans `devDependencies` for `@stonyx/*` packages, filters by `stonyx-module` / `stonyx-async` keywords, imports each module's `config/environment.js` defaults (module configs are always `.js`; see [framework module conventions](../conventions/framework-modules.md)), merges with user config, then calls `init()` concurrently
 - **Deferred module readiness:** Each module gets a `DeferredPromise`; `waitForModule(name)` lets dependent modules block until their prerequisite finishes initializing (e.g., ORM waiting for rest-server)
 - **Lifecycle hooks:** Modules implement `init()`, `startup()`, and `shutdown()` from the `StoynxModule` interface; shutdown runs in reverse registration order with error isolation
-- **Config merge strategy:** Module defaults from `config/environment.js` are deep-merged with user overrides using `mergeObject`; test environment auto-merges from `test/config/environment.js` when `NODE_ENV=test`
+- **Config merge strategy:** Module defaults from `config/environment.js` are deep-merged with user overrides using `mergeObject`; test environment auto-merges from `test/config/environment.ts` (or `.js`) when `NODE_ENV=test`
 - **CLI as entry point:** `stonyx serve` bootstraps the full framework; `stonyx test` sets up test environment; `stonyx new` scaffolds projects with interactive module selection
 - **User-defined logging:** Any config key with a `logColor` property automatically gets a named Chronicle log method at startup
 

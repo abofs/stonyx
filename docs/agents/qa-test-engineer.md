@@ -22,7 +22,7 @@
 
 - **Two-stage build for tests:** Source compiles to `dist/`, tests compile separately to `dist-test/` with their own `tsconfig.test.json` — tests import from `dist/` so both builds must succeed
 - **Unit tests only:** Tests live under `test/unit/` — no integration test directory exists; framework is tested in isolation from downstream modules
-- **Config override mechanism:** Test environment automatically merges `test/config/environment.js` when `NODE_ENV=test`, enabling per-test config without modifying source
+- **Config override mechanism:** Test environment automatically merges `test/config/environment.ts` (or `.js`) when `NODE_ENV=test`, enabling per-test config without modifying source
 - **Singleton reset required:** The `Stonyx` singleton persists across tests; teardown must reset `Stonyx.instance`, `Stonyx.initialized`, and `Stonyx.modulePromises` to avoid test pollution
 
 ## Live Knowledge

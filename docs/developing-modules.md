@@ -41,7 +41,7 @@ export default class MyModule {
 
 ## Default Configuration
 
-Async modules must include `config/environment.ts` (preferred) or `config/environment.js` with sensible defaults:
+Async modules must include `config/environment.js` with sensible defaults. **This file is always `.js`, never `.ts`** — Node refuses to type-strip inside `node_modules`, so a `.ts` module config cannot be loaded by any consumer:
 
 ```ts
 export default {
@@ -52,7 +52,7 @@ export default {
 };
 ```
 
-Stonyx's loader tries `.ts` first, then falls back to `.js` for back-compat with modules that haven't migrated. If a module ships both, `.ts` wins and a warning is logged — the `.js` is almost certainly a stale compiled artifact and should be removed before publishing.
+Stonyx's loader tries `.ts` first, then falls back to `.js`, and that order applies to module configs too — which is exactly why a module must not ship a `.ts` alongside its `.js`: `.ts` would win and then be refused by Node, producing `Config present but not loadable: …` instead of loading the `.js`. Ship the `.js` only.
 
 User project config is merged on top of these defaults.
 

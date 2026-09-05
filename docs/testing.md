@@ -19,7 +19,7 @@ The test command:
 
 ## Test Config Overrides
 
-Create `test/config/environment.js` to override configuration during tests:
+Create `test/config/environment.ts` (or `.js`) to override configuration during tests:
 
 ```js
 export default {

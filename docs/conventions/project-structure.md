@@ -56,7 +56,7 @@ models/
 
 ## Config Conventions
 
-### `config/environment.js`
+### `config/environment.ts` (or `config/environment.js`)
 
 Destructure env vars at the top, apply defaults with `??`, export a plain object:
 

@@ -37,12 +37,11 @@
 import QUnit from 'qunit';
 import { spawn } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertDistIsFresh } from '../helpers/dist-freshness.js';
-import { isWalkEntry } from '../../src/util/duplicate-core.js';
+import { esmNodeModulesWalk } from '../../src/util/duplicate-core.js';
 
 const { module, test } = QUnit;
 
@@ -110,17 +109,16 @@ function resolvePackageDir(fromDir: string, name: string): string {
 
   // `require.resolve(name)` is NOT usable here: `@stonyx/utils` publishes only
   // subpath exports and no ".", so resolving it throws
-  // ERR_PACKAGE_PATH_NOT_EXPORTED. `resolve.paths` gives the node_modules walk
-  // itself, which is what "where does this package live" actually means.
+  // ERR_PACKAGE_PATH_NOT_EXPORTED. The node_modules walk itself is what "where
+  // does this package live" actually means.
   //
-  // ANCESTOR-FILTERED — PC-E's narrowing, for the same reason: `resolve.paths`
-  // appends the CJS global folders (`NODE_PATH`, `~/.node_modules`, the node
-  // prefix) after the walk, and copying a package out of an ambient `NODE_PATH`
-  // into the consumer under test is how the green arm of this file was
-  // manufactured before the fix. `isWalkEntry` is the shared predicate.
-  for (const nodeModulesDir of createRequire(join(startDir, 'package.json')).resolve.paths(name) ?? []) {
-    if (!isWalkEntry(nodeModulesDir, startDir)) continue;
-
+  // `esmNodeModulesWalk` is the SHARED production candidate set, not a copy, so
+  // a mutation to it reds the detector's tests and this harness together. It
+  // also never consults `NODE_PATH`: copying a package out of an ambient
+  // `NODE_PATH` into the consumer under test is how the green arm of this file
+  // was manufactured before abofs/stonyx#119's first fix round, and the
+  // generated walk cannot reach one.
+  for (const nodeModulesDir of esmNodeModulesWalk(startDir)) {
     const candidate = join(nodeModulesDir, name);
     const manifest = join(candidate, 'package.json');
 

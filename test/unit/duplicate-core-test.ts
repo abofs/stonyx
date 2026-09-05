@@ -18,7 +18,7 @@
  */
 import QUnit from 'qunit';
 import { execFile } from 'node:child_process';
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -30,6 +30,7 @@ import {
   findForeignCores,
   owningCore,
   runningCore,
+  type CorePackage,
   type ForeignCore,
 } from '../../src/util/duplicate-core.js';
 import { captureConsole, createRoot, installModule, moduleSource, removeRoot, stubChronicle } from '../helpers/module-fixture.js';
@@ -39,6 +40,7 @@ const { module, test } = QUnit;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const execFileAsync = promisify(execFile);
 const coreSeenByScript = resolve(dirname(fileURLToPath(import.meta.url)), '../helpers/core-seen-by-plain-node.mjs');
+const esmResolveScript = resolve(dirname(fileURLToPath(import.meta.url)), '../helpers/esm-resolve-stonyx-plain-node.mjs');
 
 /**
  * Same hard bound as the other subprocess suites in this repo: `execFile` has
@@ -61,6 +63,35 @@ async function coreSeenByWithNodePath(moduleDir: string, nodePath: string): Prom
   if (!marker) throw new Error(`probe produced no result. stdout: ${stdout}\nstderr: ${stderr}`);
 
   return JSON.parse(marker) as { version: string } | null;
+}
+
+/**
+ * The core node's OWN ESM resolver reaches from `moduleDir` — the ground truth
+ * `coreSeenBy` exists to model, asked rather than assumed.
+ *
+ * Every claim about the candidate set is a claim about `import.meta.resolve`,
+ * so the tests below anchor to it instead of to a second implementation of the
+ * walk. That is the check the previous form did not have: `isWalkEntry` was
+ * derived from `Module._nodeModulePaths` and asserted to be exact, and it was
+ * exact for CJS and wrong for the resolver `loadModules` actually uses.
+ *
+ * `owningCore` turns the resolved entry FILE into its package root, which is
+ * the unit `coreSeenBy` returns. It is itself guarded, by D15.
+ */
+async function esmResolvedCore(moduleDir: string): Promise<CorePackage | null> {
+  assertDistIsFresh('esmResolvedCore');
+
+  const { stdout, stderr } = await execFileAsync('node', [ esmResolveScript, moduleDir ], {
+    timeout: SUBPROCESS_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  });
+  const marker = stdout.split('__ESM_RESOLVE__')[1];
+
+  if (!marker) throw new Error(`esm probe produced no result. stdout: ${stdout}\nstderr: ${stderr}`);
+
+  const resolved = JSON.parse(marker) as string | null;
+
+  return resolved ? owningCore(dirname(fileURLToPath(resolved))) : null;
 }
 
 const roots: string[] = [];
@@ -105,6 +136,29 @@ function installNestedCore(rootPath: string, moduleName: string, version: string
 
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'stonyx', version, type: 'module', main: 'dist/main.js' }));
+
+  return dir;
+}
+
+/**
+ * Installs a second physical `stonyx` package root at
+ * `<app>/node_modules/` + `node_modules/` x `levels` + `/stonyx`.
+ *
+ * `levels: 1` is the shape ESM's PACKAGE_RESOLVE reaches and the CJS walk
+ * skips — the silent miss abofs/stonyx#119 round 2 found. `levels: 2` is off
+ * the ESM walk too, because `<app>/node_modules/node_modules` is not an
+ * ancestor of the module dir; it is here so the bound is asserted rather than
+ * argued.
+ *
+ * Carries a real `main.js`: these fixtures are handed to node's own resolver,
+ * not only read as manifests.
+ */
+function installEsmNestedCore(rootPath: string, version: string, levels = 1): string {
+  const dir = join(rootPath, 'node_modules', ...Array<string>(levels).fill('node_modules'), 'stonyx');
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'stonyx', version, type: 'module', main: 'main.js' }));
+  writeFileSync(join(dir, 'main.js'), 'export default {};\n');
 
   return dir;
 }
@@ -218,12 +272,17 @@ module('[Unit] duplicate-core detector', function(hooks) {
     );
   });
 
-  // D8 — CONTROL for the walk filter in `coreSeenBy` (`isWalkEntry`).
-  // `require.resolve.paths` appends the CJS global folders (NODE_PATH,
-  // ~/.node_modules, the node prefix) after the node_modules walk. ESM ignores
-  // all of them, so honouring them would invent a "duplicate core" out of an
-  // environment variable that the real import never consults — turning a boot
-  // that works into a refusal.
+  // D8 — CONTROL for the candidate set in `coreSeenBy` (`esmNodeModulesWalk`).
+  // The candidates used to come from `require.resolve.paths`, which appends the
+  // CJS global folders (NODE_PATH, ~/.node_modules, the node prefix) after the
+  // node_modules walk. ESM ignores all of them, so honouring them invents a
+  // "duplicate core" out of an environment variable that the real import never
+  // consults — turning a boot that works into a refusal.
+  //
+  // The walk is now GENERATED rather than filtered, so there is no list
+  // carrying those entries and nothing reads the environment. This test is the
+  // regression guard on that: it must stay green for a reason, and the reason
+  // must not quietly become "the filter happens to reject them again".
   //
   // Must run in a subprocess: NODE_PATH is read once at bootstrap into
   // `Module.globalPaths`, so setting `process.env.NODE_PATH` from a test is a
@@ -300,23 +359,131 @@ module('[Unit] duplicate-core detector', function(hooks) {
       'DEEP: a NODE_PATH store INSIDE the app, whose parent is a genuine ancestor, is not reported either'
     );
 
-    // NESTED — the one shape the name test alone would let through, and the
-    // reason `isWalkEntry` also rejects a candidate whose PARENT is named
-    // `node_modules`. Node's walk never emits `<x>/node_modules/node_modules`;
-    // it stops descending at the first `node_modules`. Without that clause this
-    // entry is named `node_modules` AND parented by a genuine ancestor of the
-    // module dir, so it would be admitted — the clause was argued in a docblock
-    // and this is what makes the argument able to fail.
-    const nestedStore = join(isolated, 'node_modules', 'node_modules');
+    // The NESTED case that used to live here asserted that a core at
+    // `<app>/node_modules/node_modules` must be IGNORED, on the premise that
+    // "node's walk never descends into a directory already named
+    // `node_modules`". That premise is true of CJS and FALSE of ESM, which is
+    // the resolver this whole file models — so the assertion pinned the wrong
+    // direction and defended a silent miss. It is not deleted, it is INVERTED
+    // and moved to D17/D18/D19, where it is anchored to what
+    // `import.meta.resolve` actually returns rather than to a claim about the
+    // algorithm. Nothing about that shape belongs in a NODE_PATH test: it is
+    // reached with no NODE_PATH at all.
+  });
 
-    mkdirSync(join(nestedStore, 'stonyx'), { recursive: true });
-    writeFileSync(join(nestedStore, 'stonyx', 'package.json'), ambientManifest);
+  // D17, D18, D19 — the candidate set IS the ESM walk, in all three directions.
+  //
+  // What they replace. `isWalkEntry` derived the candidates from
+  // `require.resolve.paths` and filtered them by the CJS walk's shape, on a
+  // premise stated as EXACT: "node never descends into a directory already
+  // named `node_modules`". True of `Module._nodeModulePaths`. False of ESM's
+  // PACKAGE_RESOLVE, which has no such skip — and ESM is what `loadModules`
+  // uses. Measured from a module dir with NO `NODE_PATH` at all:
+  //
+  //   import.meta.resolve('stonyx') -> <app>/node_modules/node_modules/stonyx/main.js
+  //   await import('stonyx')        -> that copy
+  //   require.resolve('stonyx')     -> MODULE_NOT_FOUND
+  //
+  // So these three ANCHOR TO NODE rather than to a second implementation of the
+  // walk. `esmResolvedCore` runs `import.meta.resolve` in a plain subprocess
+  // from inside the fixture and reports the package root it lands on; every
+  // assertion about the candidate set is checked against that. A rewrite of
+  // `esmNodeModulesWalk` that is wrong in the same way the last one was cannot
+  // agree with it.
+
+  // D17 — THE MISS. A genuine second core one level nested, nothing else in the
+  // tree. The isolating control is D2: the same manifest one directory over, at
+  // `<module>/node_modules/stonyx`, is reported by both resolvers and by the
+  // old code. The only variable here is the directory.
+  test('D17: a second core at <app>/node_modules/node_modules is on the ESM walk and IS reported', async function(assert) {
+    const rootPath = root({ name: 'd17-app' });
+    installModule(rootPath, '@stonyx/d17-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d17-mod');
+
+    // CONTROL, before the copy exists: nothing to find, nothing reported. So a
+    // report below is the nested core and not an inert fixture.
+    assert.strictEqual(coreSeenBy(moduleDir), null, 'control: with no copy anywhere on the walk, nothing is found');
+
+    const nested = installEsmNestedCore(rootPath, '0.0.0-esm-nested');
 
     assert.strictEqual(
-      await coreSeenByWithNodePath(isolatedModuleDir, nestedStore),
-      null,
-      'NESTED: an entry named node_modules INSIDE node_modules is not one node would ever walk, and is not reported'
+      (await esmResolvedCore(moduleDir))?.root,
+      nested,
+      'premise: node\'s own ESM resolver reaches this copy — the CJS walk cannot see it at all'
     );
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, nested, 'and coreSeenBy reports the same physical root node would import');
+    assert.strictEqual(coreSeenBy(moduleDir)?.version, '0.0.0-esm-nested', 'with the version it actually sees');
+    assert.strictEqual(
+      findForeignCores([ { name: '@stonyx/d17-mod', dir: moduleDir } ]).length,
+      1,
+      'so the module is reported rather than silently missed'
+    );
+  });
+
+  // D18 — THE SHADOWING CASE, and the strongest form. The app has a CORRECT
+  // local core. ESM reaches the ancestor `<app>/node_modules` before `<app>`,
+  // so the nested copy wins over the correct one — the module loads, it
+  // initialises, it reports success and its hooks never fire, which is the
+  // opening paragraph of `duplicate-core.ts` surviving the check written to
+  // catch it. This is also the ORDER guard: a walk generated root-first instead
+  // of self-first finds the correct core and reports nothing.
+  test('D18: a nested core SHADOWS a correct local core, and the shadowing is refused', async function(assert) {
+    const rootPath = root({ name: 'd18-app' });
+    installModule(rootPath, '@stonyx/d18-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d18-mod');
+    const modules = [ { name: '@stonyx/d18-mod', dir: moduleDir } ];
+
+    // CONTROL, same tree minus the nested copy: a genuinely single-core app.
+    assert.strictEqual((await esmResolvedCore(moduleDir))?.root, runningCore()?.root, 'control: node resolves the correct local core');
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, runningCore()?.root, 'control: and so does coreSeenBy');
+    assert.deepEqual(findForeignCores(modules), [], 'control: nothing is reported');
+
+    const nested = installEsmNestedCore(rootPath, '0.0.0-esm-shadow');
+
+    assert.strictEqual(
+      (await esmResolvedCore(moduleDir))?.root,
+      nested,
+      'premise: adding the nested copy makes node import IT, not the correct core beside it'
+    );
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, nested, 'coreSeenBy reports the copy that actually wins, in node\'s order');
+    assert.strictEqual(findForeignCores(modules).length, 1, 'and the shadowed boot is refused');
+  });
+
+  // D19 — THE BOUND, i.e. the direction that would brick a working consumer.
+  // The candidate set must not over-admit either: `<app>/node_modules` is an
+  // ancestor of the module dir so its `node_modules` is on the walk, but
+  // `<app>/node_modules/node_modules` is NOT an ancestor, so two levels is off
+  // it. The bound falls out of ancestry rather than out of a rule, and this
+  // asserts that rather than arguing it.
+  test('D19: the ESM walk is bounded by ancestry — a core two levels nested is correctly ignored', async function(assert) {
+    const rootPath = root({ name: 'd19-app' });
+    installModule(rootPath, '@stonyx/d19-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+    symlinkSync(repoRoot, join(rootPath, 'node_modules', 'stonyx'), 'dir');
+
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d19-mod');
+    const modules = [ { name: '@stonyx/d19-mod', dir: moduleDir } ];
+
+    // LIVENESS: the SAME manifest at ONE level is reported. So the null result
+    // below is the depth and not an unreadable or misspelt fixture.
+    const oneLevel = installEsmNestedCore(rootPath, '0.0.0-depth-probe', 1);
+
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, oneLevel, 'liveness: at one level this exact fixture IS reported');
+
+    rmSync(join(rootPath, 'node_modules', 'node_modules'), { recursive: true, force: true });
+
+    const twoLevels = installEsmNestedCore(rootPath, '0.0.0-depth-probe', 2);
+
+    assert.ok(existsSync(join(twoLevels, 'package.json')), 'premise: the two-level copy is really on disk');
+    assert.strictEqual(
+      (await esmResolvedCore(moduleDir))?.root,
+      runningCore()?.root,
+      'premise: node itself does not reach two levels — it resolves the correct core'
+    );
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, runningCore()?.root, 'and neither does coreSeenBy');
+    assert.deepEqual(findForeignCores(modules), [], 'so a single-core app is not refused over a directory node never consults');
   });
 
   // D10 — the fail-opens are SILENT, which is the half of the disclosure that

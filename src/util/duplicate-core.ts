@@ -21,9 +21,8 @@
  * EXACTLY in their own `dependencies`, and an exact pin cannot dedupe against
  * a sibling's different exact pin.
  */
-import { createRequire } from 'node:module';
 import { readFileSync, realpathSync } from 'node:fs';
-import { basename, dirname, join, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** A resolved `stonyx` package: where it physically is, and what version. */
@@ -70,49 +69,65 @@ export type InconclusiveReporter = (message: string) => void;
 const IGNORE: InconclusiveReporter = () => {};
 
 /**
- * True exactly for the directories Node's own bare-specifier walk emits.
+ * The directories ESM consults for a bare specifier, in the order it consults
+ * them: `<d>/node_modules` for every ancestor-or-self `d` of `fromDir`.
  *
- * `require.resolve.paths(x)` returns the walk FOLLOWED BY the CJS global
+ * THE RESOLVER BEING MODELLED IS ESM. `loadModules` reaches every module
+ * through `await import`, so the copy of `stonyx` a module "would import" is
+ * whatever ESM's PACKAGE_RESOLVE finds — not whatever CJS finds. This function
+ * is generated rather than filtered, and that is the fix for a defect in each
+ * direction.
+ *
+ * TOO WIDE, the previous defect. The candidates used to come from
+ * `require.resolve.paths`, which is the CJS walk FOLLOWED BY the CJS global
  * folders — `NODE_PATH`, `~/.node_modules`, `~/.node_libraries`, the node
  * prefix. ESM ignores every one of those, so honouring them invents a
  * "duplicate" out of an ambient environment variable that the real import never
  * consults. This workspace exports `NODE_PATH` at a different `stonyx`
  * (abofs/stonyx#107), so that false positive is not hypothetical: it flips a
- * tree that boots into a hard refusal.
+ * tree that boots into a hard refusal. Generating the walk REMOVES that failure
+ * mode rather than screening for it — nothing here reads the environment, so
+ * there is no list to get the screen wrong on.
  *
- * The predicate is the walk's own shape, and it is EXACT rather than
- * approximate. Node emits `<d>/node_modules` for every ancestor-or-self `d` of
- * the starting directory, and never descends into a directory already named
- * `node_modules`. So a candidate qualifies iff it is named `node_modules`, its
- * parent is not, and its parent is an ancestor-or-self of the module dir. Any
- * global-folder entry meeting all three is by construction already in the walk,
- * so admitting it changes nothing; every other one is dropped.
+ * TOO NARROW, and this one was a SILENT MISS. `require.resolve.paths` is
+ * `Module._nodeModulePaths`, which never descends into a directory already
+ * named `node_modules`. **ESM's PACKAGE_RESOLVE has no such skip.** Measured
+ * with no `NODE_PATH` at all, from a module at `<app>/node_modules/@stonyx/x`:
  *
- * The PREVIOUS form tested only `dirname(candidate)` against the module dir.
- * For a real walk entry that is the package root and the test holds by
- * construction — but for a `NODE_PATH` entry the candidate is a raw directory,
- * so `dirname` is its PARENT, and any module dir under that parent passed. It
- * went green on macOS only because `os.tmpdir()` yields `/var/folders/...`
- * while the resolved module dir is `/private/var/folders/...`, so the prefix
- * comparison missed on `/private` rather than on non-ancestry. It reds on
- * Linux, and it reds on macOS the moment `TMPDIR` is realpath-clean.
+ *   import.meta.resolve('stonyx') -> <app>/node_modules/node_modules/stonyx/main.js
+ *   await import('stonyx')        -> that copy
+ *   require.resolve('stonyx')     -> MODULE_NOT_FOUND
  *
- * `Module.globalPaths` would express the same restriction by PROVENANCE rather
- * than by shape, and it was measured working at runtime — but `@types/node@25`
- * does not declare it, so it needs an untyped cast whose `?? []` fallback
- * silently restores the defect if the undeclared property ever moves. This form
- * typechecks natively and admits the identical set.
+ * A genuine second core there was missed silently. Worse, because ESM reaches
+ * the ancestor `<app>/node_modules` BEFORE `<app>`, that copy SHADOWS a correct
+ * local core at `<app>/node_modules/stonyx` while the pre-flight reported
+ * success — this file's own opening paragraph ("it loads, it initialises, it
+ * reports success, and its hooks silently never fire") surviving the check
+ * written to catch it. Isolating control, moving nothing but the directory: the
+ * same core at `<app>/node_modules/@stonyx/x/node_modules/stonyx` was REFUSED.
  *
- * `moduleDir` must already be realpath'd; `coreSeenBy` does that first.
+ * BOUNDED BY ANCESTRY, not by a rule. `<app>/node_modules/node_modules` is a
+ * candidate because `<app>/node_modules` is an ancestor of the module dir; two
+ * levels of nesting is not a candidate, because
+ * `<app>/node_modules/node_modules` is not an ancestor of it. Measured: a core
+ * planted two levels deep resolves to the real core, and is correctly ignored.
+ *
+ * ORDER IS LOAD-BEARING — it is what makes the shadowing case detectable, since
+ * the first candidate carrying a core is the one returned. It is Node's own
+ * order, verified positionally rather than assumed: a distinct core planted in
+ * each of the first four candidates and removed one at a time, `await import`
+ * selecting exactly this sequence.
+ *
+ * `fromDir` must already be realpath'd; `coreSeenBy` does that first.
  */
-export function isWalkEntry(candidate: string, moduleDir: string): boolean {
-  if (basename(candidate) !== 'node_modules') return false;
+export function esmNodeModulesWalk(fromDir: string): string[] {
+  const walk: string[] = [];
 
-  const owner = dirname(candidate);
+  for (let dir = fromDir; ; dir = dirname(dir)) {
+    walk.push(join(dir, 'node_modules'));
 
-  if (basename(owner) === 'node_modules') return false;
-
-  return moduleDir === owner || moduleDir.startsWith(owner.endsWith(sep) ? owner : owner + sep);
+    if (dirname(dir) === dir) return walk;
+  }
 }
 
 /**
@@ -196,23 +211,20 @@ export function runningCore(report: InconclusiveReporter = IGNORE): CorePackage 
 /**
  * The `stonyx` copy a package installed at `moduleDir` would import.
  *
- * `require.resolve.paths('stonyx')` gives Node's own `node_modules` walk for a
- * bare specifier, which ESM and CJS share — and unlike `require.resolve` it
- * does not consult the target's `exports` map, so a module whose nested core
- * is present but unbuilt is still detected rather than silently skipped.
+ * The candidate set is `esmNodeModulesWalk` — Node's ESM walk, generated, in
+ * Node's order — because ESM is the resolver `loadModules` actually uses. The
+ * first candidate that carries a `stonyx` package root wins, which is exactly
+ * how PACKAGE_RESOLVE picks. Manifests are read directly rather than through
+ * `require.resolve`, so a module whose nested core is present but unbuilt is
+ * still detected rather than silently skipped by an `exports` map.
  *
- * TWO deliberate narrowings:
- *
- *  - `moduleDir` is realpath'd FIRST. Under pnpm, `<app>/node_modules/@stonyx/orm`
- *    is a symlink into `.pnpm/@stonyx+orm@v/node_modules/@stonyx/orm`, and Node
- *    resolves that symlink before resolving the module's own imports. Walking
- *    the symlink path instead reads the app's flat `node_modules` and reports
- *    the running core for every module — the check would pass vacuously on
- *    exactly the installer `stonyx new` uses.
- *  - Candidates are restricted to the entries Node's own walk emits, by
- *    `isWalkEntry`. `require.resolve.paths` appends the CJS global folders
- *    after the walk and ESM ignores every one of them; see that function for
- *    why the predicate is what it is and what the previous one got wrong.
+ * ONE deliberate narrowing beyond the walk: `moduleDir` is realpath'd FIRST.
+ * Under pnpm, `<app>/node_modules/@stonyx/orm` is a symlink into
+ * `.pnpm/@stonyx+orm@v/node_modules/@stonyx/orm`, and Node resolves that
+ * symlink before resolving the module's own imports. Walking the symlink path
+ * instead reads the app's flat `node_modules` and reports the running core for
+ * every module — the check would pass vacuously on exactly the installer
+ * `stonyx new` uses.
  *
  * Returns `null` when no copy is reachable at all — "cannot tell", handled as
  * not-a-duplicate by `findForeignCores`. Manifests that exist but will not read
@@ -220,11 +232,8 @@ export function runningCore(report: InconclusiveReporter = IGNORE): CorePackage 
  */
 export function coreSeenBy(moduleDir: string, report: InconclusiveReporter = IGNORE): CorePackage | null {
   const resolvedModuleDir = realPath(moduleDir);
-  const candidates = createRequire(join(resolvedModuleDir, 'package.json')).resolve.paths('stonyx') ?? [];
 
-  for (const nodeModulesDir of candidates) {
-    if (!isWalkEntry(nodeModulesDir, resolvedModuleDir)) continue;
-
+  for (const nodeModulesDir of esmNodeModulesWalk(resolvedModuleDir)) {
     const core = asCore(join(nodeModulesDir, 'stonyx'), report);
 
     if (core) return core;

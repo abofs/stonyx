@@ -6,8 +6,28 @@
  */
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import type Chronicle from '@stonyx/logs';
+
+/**
+ * Joins `relativePath` under `base` and REFUSES to escape it.
+ *
+ * `installModule(root, '../../X')` and `writeRootFile(root, '../X.txt')` both
+ * wrote outside the temp root, and `removeRoot` — which only `rm -rf`s the root
+ * itself — cleaned neither, leaving debris in `os.tmpdir()` or worse. No caller
+ * passes a traversal string today; this closes the hole rather than relying on
+ * that staying true. Fixture helpers are the wrong place to trust a caller.
+ */
+function containedJoin(base: string, relativePath: string): string {
+  const root = resolve(base);
+  const target = resolve(root, relativePath);
+
+  if (target !== root && !target.startsWith(root + sep)) {
+    throw new Error(`Fixture path escapes its root: "${relativePath}" resolves to ${target}, outside ${root}`);
+  }
+
+  return target;
+}
 
 export function createRoot(pkg: Record<string, unknown>, prefix = 'stonyx-modules-fixture-'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -22,19 +42,19 @@ export function installModule(
   pkg: Record<string, unknown> | string,
   files: Record<string, string> = {}
 ): void {
-  const dir = join(rootPath, 'node_modules', name);
+  const dir = containedJoin(join(rootPath, 'node_modules'), name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'package.json'), typeof pkg === 'string' ? pkg : JSON.stringify({ type: 'module', ...pkg }));
 
   for (const [ relativePath, content ] of Object.entries(files)) {
-    const target = join(dir, relativePath);
+    const target = containedJoin(dir, relativePath);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content);
   }
 }
 
 export function writeRootFile(rootPath: string, relativePath: string, content: string): void {
-  const target = join(rootPath, relativePath);
+  const target = containedJoin(rootPath, relativePath);
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, content);
 }

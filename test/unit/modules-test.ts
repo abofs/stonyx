@@ -80,7 +80,25 @@ module('[Unit] loadModules', function(hooks) {
 
   // T2 — GUARD, and the RED baseline abofs/stonyx#106 rule 3 must flip.
   // Dies under M1 inverted (reading `dependencies` would make this module visible).
-  // DO NOT update this test here: #106 changes the behaviour and rewrites this assertion.
+  //
+  // What this pins: `loadModules` reads `devDependencies` only (modules.ts:55),
+  // so a real, installed stonyx module declared in `dependencies` is invisible
+  // to discovery. That is today's contract. It is not a desirable one.
+  //
+  // #106 rule 3 changes it — discovery scans `dependencies` ∪ `devDependencies`.
+  // This test is the RED baseline proving that change actually landed, and #106
+  // MUST invert it inside #106's own diff. Measured across all three plausible
+  // rule-3 shapes, T2 is the SOLE failure in the suite, so there is no rule-3
+  // implementation that leaves it green.
+  //
+  // Flipping it correctly, in #106, means INVERTING the assertions on this same
+  // fixture — not deleting the test, not skipping it, and not weakening it to
+  // `assert.ok(true)`. Under rule 3 the same root must yield:
+  //     modules.length === 1, modules[0].constructor.name === 'T2Beta'
+  //     Object.keys(config) === [ 'rootPath', 't2Beta' ]  (config block added)
+  //     (config.t2Beta as Record<string, unknown>).port === 2
+  // and the title should drop "flipped by #106". If you are reading this from
+  // inside #106 because this test went red: that red is the intended signal.
   test('ignores modules declared only in dependencies (today’s contract, flipped by #106)', async function(assert) {
     const rootPath = root({ name: 't2-app', dependencies: { '@stonyx/t2-beta': '1.0.0' }});
     installAsyncModule(rootPath, '@stonyx/t2-beta', 'T2Beta', { port: 2 });
@@ -92,17 +110,55 @@ module('[Unit] loadModules', function(hooks) {
     assert.deepEqual(Object.keys(config), [ 'rootPath' ], 'no module config block was added');
   });
 
-  // T3 — GUARD. Dies under M2 (`startsWith('@stonyx/')` -> `'@zzzzzz/'`).
-  test('registers only @stonyx/ scoped dependencies', async function(assert) {
+  // T3 — GUARD, on the exact line abofs/stonyx#106 rewrites (modules.ts:61-63).
+  // Dies under M2 (`startsWith('@stonyx/')` -> `'@zzzzzz/'`), the NARROWING
+  // direction, and under both WIDENING mutants, which an earlier version of
+  // this test could not see:
+  //     `startsWith('@stonyx/')` -> `startsWith('@')`   measured 97/0 SURVIVED
+  //     drop the prefix filter entirely                 measured 96/1 SURVIVED
+  // Both were invisible because every negative fixture was UNSCOPED (`lodash`,
+  // `my-stonyx-thing`), so nothing in the suite distinguished "only @stonyx/"
+  // from "only scoped". `@types/node` is the scoped non-stonyx fixture that
+  // does; it is in this repo's own devDependencies, so it is exactly what a
+  // real consumer manifest looks like.
+  //
+  // The widening direction CANNOT be asserted through `waitForModule`, and this
+  // is the trap: `waitForModule` unconditionally prepends `@stonyx/`
+  // (modules.ts:129), so a registration under the bare key `lodash` or
+  // `@types/node` is invisible to it, and `waitForModule('@types/node')` would
+  // reject identically whether or not the widening happened. Asserting it that
+  // way would be vacuous. The real observable is the loader warning: only the
+  // FILTERED list is stat-ed (modules.ts:81-85), so a widened filter makes
+  // `loadModules` stat and warn on every non-stonyx dependency in the manifest.
+  test('registers only @stonyx/ scoped dependencies, not every scoped dependency', async function(assert) {
     const rootPath = root({
       name: 't3-app',
-      devDependencies: { '@stonyx/t3-alpha': '1.0.0', 'lodash': '1.0.0', 'my-stonyx-thing': '1.0.0' },
+      devDependencies: {
+        '@stonyx/t3-alpha': '1.0.0',
+        '@types/node': '1.0.0',
+        'lodash': '1.0.0',
+        'my-stonyx-thing': '1.0.0',
+      },
     });
+    // Only the @stonyx/ entry is installed. The other three are declared and
+    // absent, so anything that reaches the load loop announces itself.
     installAsyncModule(rootPath, '@stonyx/t3-alpha', 'T3Alpha');
 
-    await loadModules({}, rootPath, stubChronicle().asChronicle());
+    const capture = captureConsole();
+
+    try {
+      await loadModules({}, rootPath, stubChronicle().asChronicle());
+    } finally {
+      capture.restore();
+    }
 
     assert.strictEqual(await raceModule('t3-alpha'), 'resolved', 'the @stonyx/ scoped dependency resolves');
+
+    assert.deepEqual(
+      capture.warnings,
+      [],
+      'nothing outside @stonyx/ was stat-ed: @types/node (scoped, non-stonyx) is filtered out, as are lodash and my-stonyx-thing (unscoped)'
+    );
 
     for (const unregistered of [ 'lodash', 'my-stonyx-thing' ]) {
       await assert.rejects(
@@ -303,6 +359,53 @@ module('[Unit] loadModules', function(hooks) {
     for (const name of [ 't11-a-async', 't11-b-sync', 't11-c-sync' ]) {
       assert.strictEqual(await raceModule(name), 'resolved', `${name} was registered and resolved`);
     }
+  });
+
+  // T21 — FORWARD GUARD for abofs/stonyx#106 rule 3. Green today and green
+  // under a CORRECT rule 3; red only under the desync #106 is most likely to
+  // produce. T11 does NOT cover this, contrary to #106 amendment 2.
+  //
+  // The hazard: rule 3 widens the load list at modules.ts:61 while the
+  // registration loop at :66 still derives from `devDependencies`. That desync
+  // is BLOCK-SCOPED, not positional. T11's guard is positional
+  // (`moduleDependencies.slice(1)`) and every one of T11's fixtures lives in
+  // `devDependencies`, so the desync leaves T11 green and reads 96/1 —
+  // byte-identical to a correct implementation. It is invisible to the suite.
+  //
+  // This fixture is the discriminator. A SYNC module (`stonyx-module`, no
+  // `stonyx-async`) declared ONLY in `dependencies` takes the `:96` branch and
+  // calls `modulePromises[moduleName].resolve()` at `:97` on a name the
+  // registration loop never registered:
+  //     TypeError: Cannot read properties of undefined (reading 'resolve')
+  //
+  // It must be SYNC. An async fixture cannot reach `:97` — it is instantiated
+  // through `initializeModule`, which resolves through the optional chain at
+  // modules.ts:43 (`modulePromises[moduleName]?.resolve()`) and swallows the
+  // same desync silently. That is also why T2's async fixture cannot catch it.
+  //
+  // Today `@stonyx/t21-sync` is in `dependencies`, so discovery never sees it
+  // and `loadModules` trivially resolves. The assertion is deliberately
+  // narrow — "does not throw" — because the pass condition must survive rule 3
+  // changing what gets loaded. #106 must keep this test green.
+  test('does not throw for a sync stonyx-module declared only in dependencies (forward guard for #106)', async function(assert) {
+    const rootPath = root({ name: 't21-app', dependencies: { '@stonyx/t21-sync': '1.0.0' }});
+    installModule(rootPath, '@stonyx/t21-sync', { keywords: [ 'stonyx-module' ], main: 'main.js' }, {
+      'main.js': moduleSource('T21Sync'),
+    });
+
+    let loadError: unknown;
+
+    try {
+      await loadModules({}, rootPath, stubChronicle().asChronicle());
+    } catch (err) {
+      loadError = err;
+    }
+
+    assert.strictEqual(
+      loadError,
+      undefined,
+      `loadModules resolved without a TypeError at modules.ts:97, got: ${String(loadError)}`
+    );
   });
 
   // T12 — GUARD. Dies under: swap the `mergeObject(moduleConfig, userConfig)`

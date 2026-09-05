@@ -267,6 +267,85 @@ module('[Unit] importConfig', function(hooks) {
       assert.ok(message.length > 0, 'has an error message');
     }
   });
+
+  // ---------------------------------------------------------------------
+  // F-3. WHICH file did the runtime refuse?
+  //
+  // `FILE_TYPE_REFUSAL_CODES.has(code)` matched on the code alone. A config
+  // that loaded and ran perfectly well, but whose own nested `import()` hit a
+  // `.ts` under `node_modules`, throws the SAME code — and was re-framed as
+  // "this Node runtime refused to load YOUR CONFIG", naming the one file that
+  // is not the problem. Measured at this head on node v24.13.0, both codes
+  // name the refused file in `message` and expose nothing as an own property
+  // (`Object.keys(error)` is `['code']` for both), so the message is the only
+  // discriminator available.
+  //
+  // Both directions are covered. T11 without T12 would be consistent with
+  // "the re-frame was removed entirely"; T12 without T11 would be consistent
+  // with "the re-frame never fires". Neither alone is worth anything.
+  //
+  // Plain node throughout: under tsx the nested `.ts` under `node_modules`
+  // loads fine and there is no refusal to discriminate.
+
+  // T11 — TRUE POSITIVE. The config file itself is refused. Still re-framed.
+  test('re-frames the refusal when the refused file IS the config', async function(assert) {
+    const modConfigDir = join(dir, 'node_modules', 'f3-true-positive', 'config');
+    mkdirSync(modConfigDir, { recursive: true });
+    writeFileSync(
+      join(modConfigDir, 'environment.ts'),
+      `const config: { source: string } = { source: 'true-positive' };\nexport default config;\n`
+    );
+
+    const result = await importConfigInPlainNode(join(modConfigDir, 'environment'));
+
+    assert.notOk(result.ok, 'premise: plain node refuses it');
+    assert.ok(
+      result.message?.startsWith(CONFIG_NOT_LOADABLE_PREFIX),
+      `the config's own refusal is still re-framed, got: ${result.message}`
+    );
+    assert.ok(
+      result.message?.includes('environment.ts'),
+      'and the re-framed message names the config file'
+    );
+    // The refused path is the realpath (`/private/var/...`) while the config
+    // path is not (`/var/...`); a plain `===` on the two strings would make
+    // this test red. That normalisation is load-bearing, not incidental.
+    assert.equal(result.causeCode, 'ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING', 'cause preserved');
+  });
+
+  // T12 — FALSE POSITIVE, the actual defect. The config is a perfectly good
+  // `.js` OUTSIDE node_modules. It loads. Its own nested import of a `.ts`
+  // UNDER node_modules is what the runtime refuses. Before this change the
+  // consumer was told their config was unloadable, which is false.
+  test('does NOT re-frame when the refused file is something the config imported', async function(assert) {
+    const depDir = join(dir, 'node_modules', 'f3-dep');
+    mkdirSync(depDir, { recursive: true });
+    writeFileSync(join(depDir, 'thing.ts'), `const value: number = 42;\nexport default value;\n`);
+    writeFileSync(
+      `${basePath}.js`,
+      `import thing from '${join(depDir, 'thing.ts')}';\nexport default { source: 'js', thing };\n`
+    );
+
+    const result = await importConfigInPlainNode(basePath);
+
+    assert.notOk(result.ok, 'premise: the nested refusal still fails the load');
+    assert.notOk(
+      result.message?.startsWith(CONFIG_NOT_LOADABLE_PREFIX),
+      `must not blame the config, got: ${result.message}`
+    );
+    assert.notOk(
+      result.message?.startsWith(CONFIG_NOT_FOUND_PREFIX),
+      'and must not read as absent either'
+    );
+    assert.ok(
+      result.message?.includes('thing.ts'),
+      `the untouched Node error names the file actually refused, got: ${result.message}`
+    );
+    assert.notOk(
+      result.message?.includes(`${basePath}.js`),
+      'and does not name the config, which loaded fine'
+    );
+  });
 });
 
 /**

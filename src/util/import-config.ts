@@ -1,5 +1,5 @@
-import { existsSync } from 'fs';
-import { pathToFileURL } from 'url';
+import { existsSync, realpathSync } from 'fs';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 /**
  * Extensions `importConfig` will load, in preference order.
@@ -64,6 +64,63 @@ const FILE_TYPE_REFUSAL_CODES = new Set([
   'ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING',
 ]);
 
+/**
+ * The first absolute POSIX path named in a Node error message.
+ *
+ * Both refusal codes name the file they refused, but in different shapes —
+ * measured on node v24.13.0:
+ *
+ *   ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING
+ *     Stripping types is currently unsupported for files under node_modules,
+ *     for "/private/tmp/x/node_modules/dep/thing.ts"
+ *   ERR_UNKNOWN_FILE_EXTENSION
+ *     Unknown file extension ".ts" for /private/tmp/x/environment.ts
+ *
+ * The second names a bare extension BEFORE it names the file, which is why
+ * this requires a leading `/` rather than matching the first quoted token.
+ * Neither error exposes the path as an own property: `Object.keys(error)` is
+ * `['code']` for both, so the message is the only source.
+ *
+ * Deliberately POSIX-only. A Windows path is simply not extracted, and
+ * `refusalIsAboutTheConfig` treats "no path extracted" as "cannot tell" and
+ * keeps the pre-existing behaviour, so this degrades rather than misfires.
+ */
+const REFUSED_PATH_PATTERN = /(?:^|[\s"'(])((?:file:\/\/)?\/[^\s"'()]+\.[A-Za-z0-9]+)/;
+
+/** Resolves symlinks so `/tmp/...` and `/private/tmp/...` compare equal. */
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * Did this runtime refuse OUR config file, or something our config imported?
+ *
+ * `FILE_TYPE_REFUSAL_CODES.has(code)` alone cannot tell. A config that loaded
+ * and ran perfectly well, but whose own nested `import()` hit a `.ts` under
+ * `node_modules`, throws the SAME code — and was reported as "this Node runtime
+ * refused to load your config", naming a file that is fine. That misdirection
+ * points the consumer at the one file that is not the problem, and the likeliest
+ * instance of it is the exact `.ts`-under-node_modules case this loader's own
+ * docs tell people to look for.
+ *
+ * Returns true when the refusal names our path, or when no path could be
+ * extracted at all (unknown message shape — keep re-framing rather than
+ * silently losing the loud error that invariant I2 exists for).
+ */
+function refusalIsAboutTheConfig(message: string, configPath: string): boolean {
+  const refused = REFUSED_PATH_PATTERN.exec(message)?.[1];
+
+  if (!refused) return true;
+
+  const refusedPath = refused.startsWith('file://') ? fileURLToPath(refused) : refused;
+
+  return refusedPath === configPath || realPath(refusedPath) === realPath(configPath);
+}
+
 export async function importConfig<T = unknown>(basePath: string): Promise<T> {
   const matches = LOADABLE_EXTENSIONS.filter(ext => existsSync(`${basePath}.${ext}`));
 
@@ -96,7 +153,7 @@ export async function importConfig<T = unknown>(basePath: string): Promise<T> {
   } catch (error) {
     const code = (error as { code?: string } | undefined)?.code;
 
-    if (code && FILE_TYPE_REFUSAL_CODES.has(code)) {
+    if (code && FILE_TYPE_REFUSAL_CODES.has(code) && refusalIsAboutTheConfig((error as Error).message, path)) {
       const sibling = matches.length > 1
         ? ` A ${basePath}.js also exists; .ts wins by design, so this is not resolved by leaving the .js in place.`
         : '';

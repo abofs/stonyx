@@ -45,10 +45,12 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { resolveModuleName } from '../../src/util/resolve-module-name.js';
 
 const { module, test } = QUnit;
 
+const execFileAsync = promisify(execFile);
 const bootScript = resolve(dirname(fileURLToPath(import.meta.url)), '../helpers/boot-stonyx.ts');
 
 /**
@@ -81,59 +83,38 @@ function makeRoot(prefix: string, pkg?: string): string {
  * The bound is not decoration. `execFile` has no default timeout, and this repo
  * sets no `QUnit.config.testTimeout`, so an unbounded child that never exits
  * hangs the entire run with no TAP output at all — the same hang-with-no-TAP
- * mode `962be57` fixed for `waitForModule` in `modules-test.ts`. Measured
- * against this exact call shape: a child holding a ref'd handle left the parent
- * UNSETTLED past 10s; the bounded form below settled in 4007ms with a named
- * error. No current fixture can reach it, but abofs/stonyx#106 adds a module
- * fixture to these boots, and a module `init()` that never resolves is exactly
- * a ref'd handle.
- *
- * Written against the raw `execFile` rather than `promisify`'d so the child
- * handle is in scope and the kill is EXPLICIT. `promisify` + the `timeout`
- * option is not sufficient on its own: `execFile` only settles once the stdio
- * pipes close, so a grandchild inheriting stdout keeps the parent pending even
- * after the child itself is gone. The timer here rejects the promise whether or
- * not the exec callback ever fires.
+ * mode `962be57` fixed for `waitForModule` in `modules-test.ts`. Measured at
+ * this head against a child that never settles (a ref'd handle, no marker):
+ * unbounded, the runner emitted nothing past the TAP header and was still
+ * running at a 30s watchdog; bounded, all six boots settle at the bound (18.2s
+ * against a 3000ms bound) with every case red and named. No current fixture can
+ * reach it, but abofs/stonyx#106 adds a module fixture to these boots, and a
+ * module `init()` that never resolves is exactly a ref'd handle.
  *
  * `SIGKILL` is deliberate — `SIGTERM` is ignorable, and the entire point of a
  * bound is that it holds against a child that is stuck.
+ *
+ * Do NOT rewrite this onto the raw `execFile` with a hand-rolled `setTimeout` +
+ * `child.kill()`. That form shipped in fix round 1 and was reverted: it kills
+ * one pid and never destroys the parent's stdio pipes, so against a child that
+ * leaves a GRANDCHILD holding stdout it emits full TAP and then hangs the
+ * runner (measured at this head: watchdog SIGKILL at 90s). The form below exits
+ * cleanly at the bound in that same scenario, because node's own `execFile`
+ * timeout destroys `stdout`/`stderr` before signalling (measured on node
+ * 24.13.0: both streams `destroyed === true` at settle). Neither form reaps the
+ * grandchild — 6 left at ppid 1 either way; the bound covers the child only.
  */
-function boot(rootPath: string, config: Record<string, unknown>): Promise<BootResult> {
-  return new Promise<BootResult>((resolvePromise, rejectPromise) => {
-    let settled = false;
+async function boot(rootPath: string, config: Record<string, unknown>): Promise<BootResult> {
+  const { stdout, stderr } = await execFileAsync(
+    'node',
+    [ '--import', 'tsx', bootScript, rootPath, JSON.stringify(config) ],
+    { env: { ...process.env, NODE_ENV: 'test' }, timeout: BOOT_TIMEOUT_MS, killSignal: 'SIGKILL' }
+  );
 
-    const child = execFile(
-      'node',
-      [ '--import', 'tsx', bootScript, rootPath, JSON.stringify(config) ],
-      { env: { ...process.env, NODE_ENV: 'test' }},
-      (error, stdout, stderr) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
+  const marker = stdout.split('__STONYX_BOOT__')[1];
+  if (!marker) throw new Error(`boot produced no result. stdout: ${stdout}\nstderr: ${stderr}`);
 
-        if (error) return rejectPromise(error);
-
-        const marker = stdout.split('__STONYX_BOOT__')[1];
-        if (!marker) return rejectPromise(new Error(`boot produced no result. stdout: ${stdout}\nstderr: ${stderr}`));
-
-        try {
-          resolvePromise(JSON.parse(marker) as BootResult);
-        } catch (parseError) {
-          rejectPromise(parseError);
-        }
-      }
-    );
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGKILL');
-      rejectPromise(new Error(
-        `boot did not complete within ${BOOT_TIMEOUT_MS}ms for rootPath ${rootPath}; child pid ${child.pid} was SIGKILLed. ` +
-        'A boot that never settles is usually a module init() that never resolves.'
-      ));
-    }, BOOT_TIMEOUT_MS);
-  });
+  return JSON.parse(marker) as BootResult;
 }
 
 function keys(config: Record<string, unknown> | null): string[] {

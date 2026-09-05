@@ -8,7 +8,7 @@ test/
   integration/
   acceptance/
   config/
-    environment.js    # test config overrides
+    environment.ts    # test config overrides (.js also supported)
   sample/             # fixtures and mocks (alternative: test/mocks/)
 ```
 
@@ -28,7 +28,7 @@ Run tests with `stonyx test` (alias: `stonyx t`), which:
 
 ## Test Config Overrides
 
-Place test-specific config at `test/config/environment.js`. Stonyx auto-merges these overrides when running in test mode.
+Place test-specific config at `test/config/environment.ts` (or `.js`). Stonyx auto-merges these overrides when running in test mode.
 
 ## Sample / Fixture Files
 

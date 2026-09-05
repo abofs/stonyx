@@ -75,6 +75,42 @@ module('[Unit] CLI Help', function(hooks) {
     assert.ok(fullOutput.includes('Usage: stonyx'), 'still shows usage despite error');
   });
 
+  // F-1. `help` is production output: it printed `config/environment.js` and
+  // `app.js` as THE project conventions while `importConfig` prefers
+  // `config/environment.ts` (src/util/import-config.ts LOADABLE_EXTENSIONS) and
+  // `resolveEntryPoint` prefers `app.ts` (src/util/resolve-entry-point.ts
+  // EXTENSIONS) — and `stonyx new` scaffolds both as `.ts`
+  // (src/cli/new.ts:257,262). Nothing asserted on this block, which is why the
+  // AC5 doc sweep could not have caught it: that sweep was path-scoped to
+  // `docs/ README.md`.
+  test('conventions block states the extension order the resolvers actually use', async function(assert) {
+    await help({ args: [], builtInCommands: {}, loadModuleCommands: async () => ({}) });
+    const fullOutput = output.join('\n');
+
+    assert.ok(
+      /Entry point:\s+app\.ts \(or app\.js\)/.test(fullOutput),
+      'entry point is advertised as .ts-preferred, matching resolveEntryPoint'
+    );
+    assert.ok(
+      /Config:\s+config\/environment\.ts \(or \.js\)/.test(fullOutput),
+      'config is advertised as .ts-preferred, matching importConfig'
+    );
+  });
+
+  // The specific regression: the line must not advertise `.js` as the only
+  // config extension. Stated as its own assertion so a future edit that drops
+  // the `(or .js)` half still reds the test above but this one stays honest
+  // about what the P0 was.
+  test('conventions block never advertises config/environment.js alone', async function(assert) {
+    await help({ args: [], builtInCommands: {}, loadModuleCommands: async () => ({}) });
+    const fullOutput = output.join('\n');
+
+    assert.notOk(
+      /Config:\s+config\/environment\.js\s*$/m.test(fullOutput),
+      'does not print `Config: config/environment.js` as the whole convention'
+    );
+  });
+
   test('shows aliases', async function(assert) {
     await help({ args: [], builtInCommands: {}, loadModuleCommands: async () => ({}) });
     const fullOutput = output.join('\n');

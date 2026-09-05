@@ -9,7 +9,7 @@ Called sequentially (in module load order) after all modules have been initializ
 ```js
 export default class MyModule {
   async startup() {
-    // Called after all modules are init'd, before app.js runs
+    // Called after all modules are init'd, before the app entry point runs
   }
 }
 ```

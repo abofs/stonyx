@@ -2,7 +2,7 @@
 
 ## Entry Point
 
-The application entry point is always `app.js` at the project root. This file exports a default class that initializes the application.
+The application entry point is `app.ts` (preferred) or `app.js` at the project root — `stonyx serve` resolves `.ts` first and falls back to `.js` (see [CLI](../cli.md#serve)). This file exports a default class that initializes the application.
 
 ```js
 import log from 'stonyx/log';
@@ -56,7 +56,7 @@ models/
 
 ## Config Conventions
 
-### `config/environment.js`
+### `config/environment.ts` (or `config/environment.js`)
 
 Destructure env vars at the top, apply defaults with `??`, export a plain object:
 

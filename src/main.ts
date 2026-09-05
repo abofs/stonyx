@@ -17,7 +17,7 @@
 import Chronicle from '@stonyx/logs';
 import loadModules from './modules.js';
 import { mergeObject } from '@stonyx/utils/object';
-import { importConfig } from './util/import-config.js';
+import { importConfig, CONFIG_NOT_FOUND_PREFIX } from './util/import-config.js';
 import { resolveModuleName } from './util/resolve-module-name.js';
 import type { StoynxModule } from './lifecycle.js';
 import type { StoynxConfig } from './modules.js';
@@ -68,8 +68,12 @@ export default class Stonyx {
         const merged = mergeObject(config as Record<string, unknown>, testOverrides);
         Object.assign(config, merged);
       } catch (err) {
-        // Missing test override is non-fatal; re-throw import errors that aren't "not found"
-        if (!(err instanceof Error) || !err.message.startsWith('Config not found:')) throw err;
+        // A test override that is genuinely ABSENT is non-fatal. Everything else
+        // re-throws — including `CONFIG_NOT_LOADABLE_PREFIX`, which is the whole
+        // point of that prefix existing (abofs/stonyx#105, invariant I2). A
+        // config the consumer wrote and this loader declined must never reach
+        // the caller as "you have no test overrides".
+        if (!(err instanceof Error) || !err.message.startsWith(CONFIG_NOT_FOUND_PREFIX)) throw err;
       }
     }
 

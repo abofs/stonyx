@@ -28,6 +28,21 @@ stonyx new my-app       # Creates my-app/ in the current directory
 
 Scaffolded projects are TypeScript-first: every consumer-authored source file is `.ts`, with a root `tsconfig.json`, and `tsx`/`typescript` in `devDependencies`.
 
+**`stonyx new` requires a TTY on stdin.** The module questions are interactive and
+there is no non-interactive mode. With stdin piped or closed it exits before creating
+anything, with `Error: Interactive confirm() requires a TTY on stdin.` Automated
+harnesses must drive it under a pty (for example `expect`); a `--yes` / `--modules=`
+flag is tracked in abofs/stonyx#113.
+
+**What the generated manifest declares.** The core is written to `dependencies`,
+pinned to the exact version of the `stonyx` package that ran the command, and every
+selected `@stonyx/*` module is written to `devDependencies` at the dist-tag of that
+core's release line — `beta` from a `0.2.3-beta.n` core, `latest` from a stable one.
+Neither the core nor any module is scaffolded at a floating `latest` while the core is
+on a prerelease line; see
+[Modules — Why not `latest`](modules.md#why-not-latest) for the measurement behind
+that choice.
+
 Generated layout (minimal — additional directories appear per the modules you select):
 
 ```

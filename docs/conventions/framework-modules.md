@@ -2,6 +2,55 @@
 
 When to use which `@stonyx/*` module. Always check these before reaching for Node built-ins or npm packages.
 
+## A module never declares `stonyx` in `dependencies`
+
+**Rule.** A `@stonyx/*` module declares the core in `devDependencies` — pinned to the
+version it develops and tests against — plus a **non-optional** `peerDependencies`
+range. It never declares `stonyx` in `dependencies`.
+
+**The principle the rule protects.** An application must resolve exactly one copy of
+`stonyx`, because the framework is a singleton: `Stonyx.start()` initialises one core,
+and any module holding a different copy sees an uninitialised framework. A peer range
+is satisfied by the copy the application already resolved; a `dependencies` entry is a
+copy the module brings with it, and two modules pinning two different exact versions
+can never dedupe to one.
+
+`@stonyx/discord` is the reference implementation. From `npm view @stonyx/discord@beta`
+on 2026-09-05:
+
+```json
+{
+  "devDependencies": { "stonyx": "0.2.3-beta.95" },
+  "peerDependencies": { "stonyx": ">=0.2.3-beta.4" }
+}
+```
+
+Measured on 2026-09-05, one application manifest with `stonyx` at `0.2.3-beta.96` in
+`dependencies`, one module swapped, `pnpm install` each time:
+
+| module in `devDependencies` | its `stonyx` declaration | distinct cores resolved |
+|---|---|---|
+| `@stonyx/discord@beta` | `devDependencies` + non-optional peer | **1** — `0.2.3-beta.96` |
+| `@stonyx/sockets@beta` | `dependencies: "0.2.3-beta.62"` | **2** — `0.2.3-beta.62`, `0.2.3-beta.96` |
+
+**The peer range must not be optional.** `peerDependenciesMeta.stonyx.optional = true`
+tells the installer the peer may be absent, which turns a missing core from an install
+error into a runtime one. `@stonyx/discord` declares no `peerDependenciesMeta` entry
+for `stonyx`. (Optional peers are appropriate for *other* modules a module can work
+without — `@stonyx/orm` marks `@stonyx/rest-server` optional for exactly that reason —
+never for the core.)
+
+Modules still out of compliance as of 2026-09-05, each declaring `stonyx` in
+`dependencies` at an exact version: `@stonyx/cron` (`0.2.3-beta.95`), `@stonyx/oauth`
+(`0.2.3-beta.95`), `@stonyx/orm` (`0.2.3-beta.96`), `@stonyx/rest-server`
+(`0.2.3-beta.95`), `@stonyx/sockets` (`0.2.3-beta.62`). Tracked in abofs/stonyx#106 and
+abofs/stonyx#108. Until all five have shipped the rule **and republished**, an
+application that installs any of them still resolves more than one core — a partial
+rollout produces no observable improvement.
+
+Consumer-side guidance, and the command that counts copies, is in
+[Modules — Version alignment](../modules.md#version-alignment).
+
 ## Module `config/environment.js` is always JavaScript
 
 Every `@stonyx/*` module that exposes default configuration does so through `config/environment.js`. This file is a **consumer contract**, not implementation code.

@@ -178,10 +178,42 @@ module('[Unit] refusalIsAboutTheConfig', function() {
     ));
   });
 
-  // Node emits BOTH shapes for the same code. Measured at this head: driven
-  // through `importConfig` directly the path is bare, but through `loadModules`
-  // the same error names `file:///private/var/...`. Deleting the `file://`
-  // branch on the strength of the first two samples would have been wrong.
+  // Node emits BOTH shapes for the same code, and the discriminator is NOT
+  // macOS `/private` (that prefix appears in both) and NOT `loadModules` vs
+  // `importConfig` (`loadModules` reaches Node through this same
+  // `importConfig`). Read out of this runtime's own internals via
+  // `process.binding('natives')` on node v24.13.0 -- one function,
+  // `stripTypeScriptModuleTypes`, two call sites:
+  //
+  //   internal/modules/esm/get_format:148   (..., fileURLToPath(url))  BARE
+  //   internal/modules/esm/translators:654  (..., url)                 file://
+  //   internal/modules/esm/translators:663  (..., url)                 file://
+  //   internal/modules/esm/get_format:185   ERR_UNKNOWN_FILE_EXTENSION(ext,
+  //                                         fileURLToPath(url))   BARE, always
+  //
+  // Which one runs is decided at `get_format:136-139`: for a `.ts` under
+  // `--strip-types`, if the package scope declares a `type` the format is
+  // already known, so it returns `${packageType}-typescript` and a translator
+  // strips (URL). With no `type`, get_format strips inline to DETECT the
+  // format, and passes the bare path. Measured through dist/ under plain node,
+  // same fixture, only the package.json differing:
+  //
+  //   {"type":"module"}    ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING  file://
+  //   {"type":"commonjs"}  same code                                    file://
+  //   no `type`            same code                                    bare
+  //   any, --no-experimental-strip-types   ERR_UNKNOWN_FILE_EXTENSION   bare
+  //
+  // The package scope that decides is the one containing the REFUSED file, and
+  // scope lookup stops at `node_modules` -- measured: a dep with no
+  // package.json at all, inside an app declaring `type: 'module'`, still gets
+  // the bare shape. So for the refusal `src/modules.ts:103` actually hits, the
+  // deciding file is the MODULE's package.json, not the consumer's.
+  //
+  // Every `@stonyx/*` module declares `type: 'module'`, as does `stonyx`
+  // itself, and `src/cli/new.ts:81` scaffolds it into every app `stonyx new`
+  // creates. The `file://` shape is therefore what the DEFAULT setup produces,
+  // not a coincidence of one fixture -- which is why deleting this branch as
+  // speculative would have broken the common case.
   test('true when the refusal names the config as a file:// URL', function(assert) {
     assert.true(refusalIsAboutTheConfig(
       `Stripping types is currently unsupported for files under node_modules, for "file://${configPath}"`,

@@ -106,6 +106,18 @@ const FILE_TYPE_REFUSAL_CODES = new Set([
  * tail extracts both, and the quoted form tolerates quotes inside the path
  * because it runs to the message-final quote rather than to the first one.
  *
+ * `(?:file:\/\/)?` is not defensive padding. Node names the refused file as a
+ * `file://` URL whenever the package scope containing it declares a `type`,
+ * and as a bare path when it does not -- one function
+ * (`stripTypeScriptModuleTypes`) reached from two call sites,
+ * `internal/modules/esm/translators:654,663` with the URL and
+ * `internal/modules/esm/get_format:148` with `fileURLToPath(url)`. Scope
+ * lookup stops at `node_modules`, so for `src/modules.ts:103` the deciding
+ * file is the MODULE's `package.json` -- and every `@stonyx/*` module declares
+ * `type: 'module'`, as does the app `src/cli/new.ts:81` scaffolds. The URL
+ * shape is the default case. See `test/unit/import-config-test.ts` for the
+ * measured matrix.
+ *
  * Still POSIX-only, and still not exhaustive — a Windows path is not extracted,
  * and neither is a message with trailing text after the path. That is now SAFE
  * rather than merely degraded: see `refusalIsAboutTheConfig`.

@@ -36,8 +36,8 @@ export default async function help({ args, builtInCommands, loadModuleCommands }
   console.log('\nAliases: s=serve, t=test, n=new, h=help\n');
 
   console.log('Project conventions:\n');
-  console.log('  Entry point:       app.js');
-  console.log('  Config:            config/environment.js');
+  console.log('  Entry point:       app.ts (or app.js)');
+  console.log('  Config:            config/environment.ts (or .js)');
   console.log('  DB schema:         config/db-schema.js');
   console.log('  Models:            models/');
   console.log('  Serializers:       serializers/');

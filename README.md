@@ -22,7 +22,7 @@ stonyx serve
 The `new` command walks you through module selection and generates a ready-to-run project. From there, the CLI handles bootstrapping:
 
 ```bash
-stonyx serve    # Bootstrap + run app.js
+stonyx serve    # Bootstrap + run app.ts (or app.js)
 stonyx test     # Bootstrap + run tests
 stonyx help     # Show all available commands
 ```

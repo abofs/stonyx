@@ -36,12 +36,13 @@
  */
 import QUnit from 'qunit';
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertDistIsFresh } from '../helpers/dist-freshness.js';
+import { isWalkEntry } from '../../src/util/duplicate-core.js';
 
 const { module, test } = QUnit;
 
@@ -96,18 +97,37 @@ function installCore(dir: string, version: string): void {
  * one `stonyx new` uses.
  */
 function resolvePackageDir(fromDir: string, name: string): string {
+  // REALPATH FIRST — the same narrowing `src/util/duplicate-core.ts` documents
+  // and PC-D exists for, and the reason this helper died in `hooks.before` on
+  // every pnpm install until abofs/stonyx#119's first fix round. Under pnpm
+  // `<repo>/node_modules/@stonyx/logs` is a SYMLINK into
+  // `.pnpm/@stonyx+logs@<v>/node_modules/@stonyx/logs`, and `resolve.paths` is
+  // purely lexical: it walks the link path, never reaches the store directory
+  // where `chalk` actually lives, and the only remaining hit is a `NODE_PATH`
+  // entry outside the repo entirely. Node resolves the symlink before resolving
+  // the package's own imports; so must this.
+  const startDir = realpathSync(fromDir);
+
   // `require.resolve(name)` is NOT usable here: `@stonyx/utils` publishes only
   // subpath exports and no ".", so resolving it throws
   // ERR_PACKAGE_PATH_NOT_EXPORTED. `resolve.paths` gives the node_modules walk
   // itself, which is what "where does this package live" actually means.
-  for (const nodeModulesDir of createRequire(join(fromDir, 'package.json')).resolve.paths(name) ?? []) {
+  //
+  // ANCESTOR-FILTERED — PC-E's narrowing, for the same reason: `resolve.paths`
+  // appends the CJS global folders (`NODE_PATH`, `~/.node_modules`, the node
+  // prefix) after the walk, and copying a package out of an ambient `NODE_PATH`
+  // into the consumer under test is how the green arm of this file was
+  // manufactured before the fix. `isWalkEntry` is the shared predicate.
+  for (const nodeModulesDir of createRequire(join(startDir, 'package.json')).resolve.paths(name) ?? []) {
+    if (!isWalkEntry(nodeModulesDir, startDir)) continue;
+
     const candidate = join(nodeModulesDir, name);
     const manifest = join(candidate, 'package.json');
 
     if (existsSync(manifest) && (JSON.parse(readFileSync(manifest, 'utf8')) as { name?: string }).name === name) return candidate;
   }
 
-  throw new Error(`could not locate the package root of "${name}" from ${fromDir}`);
+  throw new Error(`could not locate the package root of "${name}" from ${fromDir} (realpath ${startDir})`);
 }
 
 function fixtureSource(slug: string, marker: string): Record<string, string> {

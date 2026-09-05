@@ -2,6 +2,7 @@ import QUnit from 'qunit';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 import newCommand, {
   scaffoldProject,
   generateAppTs,
@@ -229,4 +230,101 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// abofs/stonyx#113 — what the scaffold emits as dependency specifiers.
+//
+// Scaffolded consumers must land on a predictable core version and a coherent
+// module set. Every test below is scaffolded as QUnit.todo: it must FAIL while
+// the generator still emits "latest", and QUnit hard-fails a todo that starts
+// passing, which forces the conversion to `test` when the fix lands.
+// ---------------------------------------------------------------------------
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(testDir, '../../..');
+
+async function readOwnVersion(): Promise<string> {
+  const raw = await fs.readFile(path.join(repoRoot, 'package.json'), 'utf8');
+  return JSON.parse(raw).version as string;
+}
+
+QUnit.module('[Unit] CLI New — dependency specifier emission (#113)', function () {
+  QUnit.todo('emits the core at the generator\'s own exact version, read from package.json', async function (assert) {
+    const pkg = JSON.parse(generatePackageJson('test-app', []));
+    const own = await readOwnVersion();
+
+    assert.strictEqual(coreSpecifier(pkg), own, 'core specifier equals the generator\'s own version');
+  });
+
+  QUnit.todo('emits the core as an exact version, never a tag or a range', async function (assert) {
+    const pkg = JSON.parse(generatePackageJson('test-app', []));
+
+    assert.ok(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(coreSpecifier(pkg) ?? ''), 'core specifier is an exact semver');
+  });
+
+  QUnit.todo('declares the core in dependencies, not devDependencies', async function (assert) {
+    const pkg = JSON.parse(generatePackageJson('test-app', []));
+
+    assert.ok(pkg.dependencies && pkg.dependencies.stonyx, 'stonyx is in dependencies');
+    assert.notOk(pkg.devDependencies.stonyx, 'stonyx is not in devDependencies');
+  });
+
+  QUnit.todo('emits every MODULE_OPTIONS package on the core\'s release line', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const options = mod.MODULE_OPTIONS as { package: string }[];
+    const releaseTagFor = mod.releaseTagFor as (v: string) => string;
+    const own = await readOwnVersion();
+    const pkg = JSON.parse(generatePackageJson('test-app', options as Parameters<typeof generatePackageJson>[1]));
+
+    for (const option of options) {
+      assert.strictEqual(pkg.devDependencies[option.package], releaseTagFor(own), `${option.package} on the core's release line`);
+    }
+  });
+
+  QUnit.todo('emits no dependency at "latest"', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const options = mod.MODULE_OPTIONS as { package: string }[];
+    const pkg = JSON.parse(generatePackageJson('test-app', options as Parameters<typeof generatePackageJson>[1]));
+    const specs = Object.entries({ ...(pkg.dependencies ?? {}), ...pkg.devDependencies });
+
+    for (const [name, spec] of specs) {
+      assert.notStrictEqual(spec, 'latest', `${name} is not specified as "latest"`);
+    }
+  });
+
+  QUnit.todo('releaseTagFor maps a version to its own release line', async function (assert) {
+    const mod = await import('../../../src/cli/new.js') as Record<string, unknown>;
+    const releaseTagFor = mod.releaseTagFor as (v: string) => string;
+
+    assert.strictEqual(releaseTagFor('0.2.3-beta.96'), 'beta', 'beta prerelease -> beta tag');
+    assert.strictEqual(releaseTagFor('0.2.3-alpha.49'), 'alpha', 'alpha prerelease -> alpha tag');
+    assert.strictEqual(releaseTagFor('0.2.2'), 'latest', 'stable version -> latest tag');
+  });
+});
+
+QUnit.module('[Unit] CLI New — scaffolded manifest on disk (#113)', function (hooks) {
+  let tempDir: string;
+  let projectDir: string;
+
+  hooks.beforeEach(async function () {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stonyx-new-113-'));
+    projectDir = path.join(tempDir, 'sample-app');
+    await scaffoldProject(projectDir, 'sample-app', []);
+  });
+
+  hooks.afterEach(async function () {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  QUnit.todo('the written package.json pins the core at the generator\'s own version', async function (assert) {
+    const pkg = JSON.parse(await fs.readFile(path.join(projectDir, 'package.json'), 'utf8'));
+    const own = await readOwnVersion();
+
+    assert.strictEqual(coreSpecifier(pkg), own, 'written manifest pins the running core exactly');
+  });
+});
+
+function coreSpecifier(pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }): string | undefined {
+  return pkg.dependencies?.stonyx ?? pkg.devDependencies?.stonyx;
 }

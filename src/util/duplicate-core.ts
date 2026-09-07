@@ -326,7 +326,8 @@ export function findForeignCores(
  * NOTHING OFF DISK IS TRUSTED FOR DISPLAY — all three interpolated fields.
  *
  * `version` and the package root come from a manifest this app did not write.
- * `moduleName` is narrower — it is a key from the app's own `devDependencies`,
+ * `moduleName` is narrower — it is a key from the app's own `dependencies` or
+ * `devDependencies` (abofs/stonyx#106 rule 3: the loader scans the union),
  * so forging it is an app author forging their own diagnostic — but it is
  * rendered through the same `padEnd` table, and it caused the same two
  * symptoms: seeded with ANSI escapes and embedded newlines it FORGED A
@@ -358,7 +359,7 @@ export function findForeignCores(
  * nothing but its own wrap. The module name and the version are both inside
  * PADDED columns whose widths are the max over every row, so one long value
  * there pushes every other row's remaining columns off screen. Those two take
- * the tight default; a scoped `@stonyx/*` devDependency key is far short of it,
+ * the tight default; a scoped `@stonyx/*` dependency key is far short of it,
  * so a real name is sanitised and never shortened either.
  */
 const PATH_LIMIT = 1024;
@@ -439,10 +440,21 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
     'peerDependencies range, never as an exact dependency — @stonyx/discord is the reference shape. ' +
     consumerRemedy,
     '',
+    // THIS PARAGRAPH IS A CLAIM ABOUT WHAT THE LOADER SCANS, printed at the
+    // moment boot is refused. abofs/stonyx#106 rule 3 widened that scan to the
+    // de-duplicated union of `dependencies` and `devDependencies`, and until
+    // PR #120 fix round 1 this sentence still said `devDependencies` only —
+    // so a refusal could name `seen by "@stonyx/x"` for a package declared
+    // ONLY in `dependencies` and then, seven lines later, tell the operator
+    // that such a declaration is not counted. Reproduced verbatim before the
+    // fix. That sends them to search `devDependencies`, where there is nothing.
+    // If the scan source ever changes again, this string changes with it;
+    // `duplicate-core-test.ts` D4 asserts the claim, not just the header.
     'Scope of this check: it compares physical package ROOTS only. It does not check that the ' +
     'single surviving copy is a compatible version, and it looks at @stonyx/* packages declared in ' +
-    'this app\'s devDependencies that carry the "stonyx-module" keyword — nothing else. A copy ' +
-    'dragged in by anything outside that set, including an @stonyx/* package declared in ' +
-    'dependencies rather than devDependencies, is not counted.',
+    'this app\'s dependencies or devDependencies that carry the "stonyx-module" keyword — nothing ' +
+    'else. Either placement counts: the loader scans the de-duplicated union of both maps. A copy ' +
+    'dragged in by anything outside that set — a transitive dependency, a package without the ' +
+    'keyword, or one not declared in this app\'s manifest at all — is not counted.',
   ].join('\n');
 }

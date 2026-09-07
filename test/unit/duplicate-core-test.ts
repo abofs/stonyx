@@ -696,6 +696,37 @@ module('[Unit] duplicate-core detector', function(hooks) {
     assert.ok(message.includes('pin stonyx@0.2.3-beta.94'), 'and the consumer\'s interim remedy');
     assert.ok(message.includes('Scope of this check'), 'and states what it does NOT cover');
     assert.notOk(message.includes('config/environment'), 'and never mentions config/environment — that was the false claim');
+
+    // A GUARD OVER THE HEADER IS NOT A GUARD OVER THE CLAIM.
+    //
+    // This test previously asserted only `includes('Scope of this check')`.
+    // abofs/stonyx#106 rule 3 then widened the loader's scan to the union of
+    // `dependencies` and `devDependencies` while the paragraph under that
+    // header still said `devDependencies` only — and the assertion above
+    // stayed green over a diagnostic that had become false. Reproduced before
+    // the fix: a refusal that printed `seen by "@stonyx/dup-mod"` for a
+    // package declared ONLY in `dependencies`, then seven lines later told the
+    // operator that such a declaration is not counted.
+    //
+    // So the assertions below pin the CLAIM. `notOk` is the load-bearing half:
+    // an `ok` on the new wording alone would still pass if the old sentence
+    // were left sitting beside it.
+    assert.ok(
+      message.includes('declared in this app\'s dependencies or devDependencies'),
+      `the scope paragraph names BOTH maps, matching what loadModules scans, got: ${message}`
+    );
+    assert.ok(
+      message.includes('Either placement counts'),
+      'and says so in as many words, because this prints while boot is being refused'
+    );
+    assert.notOk(
+      message.includes('declared in dependencies rather than devDependencies, is not counted'),
+      'and no longer tells the operator that a `dependencies` declaration is out of scope'
+    );
+    assert.notOk(
+      message.includes('this app\'s devDependencies that carry'),
+      'nor states the narrow pre-#106 scan source anywhere'
+    );
   });
 
   // D9 — the copy COUNT and the pin advice, both found wrong by running the

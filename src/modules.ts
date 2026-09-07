@@ -37,7 +37,24 @@ function initializeModule(
 
   modules.push(moduleInstance);
 
-  if (!moduleInstance.init) return;
+  // A module class with no `init()` has nothing to initialise, so it is ready
+  // the moment it is instantiated. Without this its registered promise dangles
+  // — the only resolve on this path lives inside the `init()` wrapper below,
+  // which is never created. Third of the three never-resolved paths named in
+  // #120, and the one that scoping registration to `discovered` does NOT close,
+  // because such a module IS discovered — measured, not reasoned: with only
+  // the registration fix applied the suite read 180/1 with T24 the sole
+  // failure. Resolving here is truthful, because the module really did load,
+  // and that is what separates it from resolving on a discovery `continue`,
+  // where there is no module to be ready.
+  //
+  // `?.` for the reason the resolve below carries it: `initializeModule` is
+  // also reached from the standalone path as `initializeModule(projectName, …)`,
+  // and `projectName` is never a key in `modulePromises`.
+  if (!moduleInstance.init) {
+    modulePromises[moduleName]?.resolve();
+    return;
+  }
 
   initPromises.push((async () => {
     await moduleInstance.init!();
@@ -150,13 +167,6 @@ export default async function loadModules(
     (moduleName: string) => moduleName.startsWith('@stonyx/')
   );
 
-  // Setup module promises prior to initialization
-  for (const moduleName of moduleDependencies) {
-    const promise = {} as DeferredPromise;
-    modulePromises[moduleName] = promise;
-    promise.ready = new Promise<void>(resolve => promise.resolve = resolve);
-  }
-
   // DISCOVERY, hoisted above the pre-flight.
   //
   // The pre-flight must check exactly what the loader loads, and no more.
@@ -190,6 +200,42 @@ export default async function loadModules(
       package: modulePackage as Record<string, unknown>,
       keywords,
     });
+  }
+
+  // Setup module promises prior to initialization — over `discovered`, NOT
+  // over `moduleDependencies`.
+  //
+  // This loop used to run above discovery and consume the declared list. That
+  // was already the shape at base, but rule 3 widened what the declared list
+  // contains, and the widening turned a fast named throw into an unbounded
+  // boot hang. A name registered here but never resolved leaves
+  // `waitForModule` pending forever; discovery `continue`s past two kinds of
+  // name without reaching either of this file's two resolve sites — a manifest
+  // that is not there, and a package without the `stonyx-module` keyword.
+  // `@stonyx/logs` ships without that keyword and is an ordinary `dependencies`
+  // entry, so this is a shape the fleet actually has.
+  //
+  //   name in `dependencies`, not installed, another module awaits it
+  //     base 5693744  throws "…was not registered in project dependencies", 3 ms
+  //     a57045e       one console.warn, then loadModules never settles
+  //
+  // Registering only what discovery admitted restores the fail-fast for both,
+  // and for `devDependencies`-declared names too — that half is INHERITED, not
+  // introduced here, and it is a real behaviour change: hang becomes throw.
+  // T13 pins it, and the PR body names it.
+  //
+  // The alternative — resolving in each `continue` branch — also removes the
+  // hang and is worse: `waitForModule` would report success for a module that
+  // was never loaded, silently. T23 asserts the named rejection precisely so
+  // that remedy cannot pass.
+  //
+  // Ordering is safe: nothing between here and the old site touches
+  // `modulePromises`, discovery only reads manifests, and registration still
+  // completes before the first `init()` can run.
+  for (const { name: moduleName } of discovered) {
+    const promise = {} as DeferredPromise;
+    modulePromises[moduleName] = promise;
+    promise.ready = new Promise<void>(resolve => promise.resolve = resolve);
   }
 
   // Pre-flight: invariant I1, "one core". Before ANY module entry point is

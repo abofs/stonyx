@@ -715,7 +715,7 @@ module('[Unit] duplicate-core detector', function(hooks) {
     // WHAT THESE CANNOT DO, stated because round 2 found it out the hard way:
     // they pin WORDING, over a hand-built `ForeignCore[]`. This test never runs
     // the check, so a scope sentence that is false about a copy the check
-    // really counts passes here untouched. D20 is the sibling that runs it.
+    // really counts passes here untouched. D22 is the sibling that runs it.
     assert.ok(
       message.includes('declared in this app\'s dependencies or devDependencies'),
       `the scope paragraph names BOTH maps, matching what loadModules scans, got: ${message}`
@@ -734,15 +734,29 @@ module('[Unit] duplicate-core detector', function(hooks) {
     );
   });
 
-  // D20 — THE SCOPE PARAGRAPH, MEASURED AGAINST A COPY THE CHECK ACTUALLY
-  // COUNTS. The sibling D4 asks for and could not be.
+  // D22 — THE SCOPE PARAGRAPH, MEASURED AGAINST A COPY THE CHECK ACTUALLY
+  // COUNTS. It pins THREE SPECIFIC STRINGS over a real `findForeignCores` run.
+  // It does not close the class, and the header used to imply it did.
   //
-  // D4 above pins the scope paragraph's wording over a hand-built
-  // `ForeignCore[]`. It never calls `findForeignCores`, so it can catch a
-  // regression to the pre-#106 text and structurally cannot catch the
-  // paragraph being FALSE about a copy the check counts. Round 2 found exactly
-  // that: the closing sentence excluded "a copy dragged in by ... a package
-  // without the keyword", and the commonest shape there is counts one.
+  // WHAT IT IS NOT. D4 above pins the paragraph's wording over a hand-built
+  // `ForeignCore[]`, never calling the check, so it structurally cannot catch
+  // the paragraph being FALSE about a copy the check counts — round 2 found
+  // exactly that. This test runs the check, which is a real improvement in
+  // premise: the copy the prose is judged against is one the code genuinely
+  // counted and printed. But the improvement stops there. The behavioural
+  // assertions and the prose assertions below are not connected by anything:
+  // nothing derives a prose check from the fact just measured. MEASURED at
+  // c87826b — a false closing sentence phrased a third way, avoiding both
+  // strings this test forbids, keeping the one it requires, and flatly denying
+  // the very copy asserted two lines above, reads 183 pass / 0 fail. FULLY
+  // GREEN. So the class Phase 5 raised in round 2 is still structurally open,
+  // and this test does not close it. Closing it would mean deriving the
+  // assertion from the counted fact — parsing the paragraph for a sentence
+  // that excludes the owner of a root present in `foreign` — which is more
+  // machinery than this is worth. The honest claim is the narrow one: the two
+  // `notOk`s are regression guards on two sentences that were each shipped
+  // false once, and the `ok` requires the enumeration framing that replaced
+  // them.
   //
   // THE SHAPE, and it is the one the docs walk a consumer through:
   // `npm install -g stonyx` then `stonyx new`. The running core is the global
@@ -754,32 +768,43 @@ module('[Unit] duplicate-core detector', function(hooks) {
   // it. So it is counted, and it is the root printed in the `seen by` row that
   // the scope paragraph sits under.
   //
-  // WHAT THIS CATCHES AND WHAT IT DOES NOT. The first four assertions are
-  // behavioural and die if the walk stops reaching an app-level copy. The last
-  // three tie the paragraph to them: it must not exclude the class that owns
-  // the copy just counted, and it must describe the ENUMERATION (the walk)
-  // rather than close a set of packages, which is the framing the defect keeps
-  // coming back through. A brand-new false exclusion phrased some third way
-  // would still get past — no prose assertion closes that — but the
-  // package-set framing itself cannot return silently.
-  test('D20: a copy owned by a package outside the discovered set IS counted, and the scope paragraph does not deny it', function(assert) {
-    const rootPath = root({ name: 'd20-app', dependencies: { stonyx: '0.0.0-app-local' }});
-    installModule(rootPath, '@stonyx/d20-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+  // WHAT THIS CATCHES AND WHAT IT DOES NOT. The fixture premise plus the three
+  // behavioural assertions after it die if the walk stops reaching an
+  // app-level copy. (The premise itself does not — it dies only if the fixture
+  // core gains a `keywords` field, which is a different failure, so it is not
+  // counted among the behavioural ones.) The last three tie the paragraph to
+  // them: it must not exclude the class that owns the copy just counted, and
+  // it must describe the ENUMERATION (the walk) rather than close a set of
+  // packages, which is the framing the defect keeps coming back through. A
+  // brand-new false exclusion phrased some third way still gets past — see the
+  // 183/0 measurement in the header — but the package-set framing itself
+  // cannot return silently.
+  test('D22: a copy owned by a package outside the discovered set IS counted, and the scope paragraph does not deny it', function(assert) {
+    const rootPath = root({ name: 'd22-app', dependencies: { stonyx: '0.0.0-app-local' }});
+    installModule(rootPath, '@stonyx/d22-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
 
     // `levels: 0` is `<app>/node_modules/stonyx` — the app's own core, which is
     // what `stonyx new` installs and what a global CLI invocation is NOT.
     const appLocalCore = installEsmNestedCore(rootPath, '0.0.0-app-local', 0);
-    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d20-mod');
-    const foreign = findForeignCores([ { name: '@stonyx/d20-mod', dir: moduleDir } ]);
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d22-mod');
+    const foreign = findForeignCores([ { name: '@stonyx/d22-mod', dir: moduleDir } ]);
 
+    // Read the COPY THAT IS COUNTED, not the repo. The repo's own manifest was
+    // asserted here and validated neither side: `installEsmNestedCore` never
+    // writes `keywords`, so a fixture core carrying `stonyx-module` would have
+    // left this green, while adding `keywords` to the repo manifest reds it
+    // spuriously (measured 182/1 at c87826b). The real shape it stands for —
+    // `stonyx/package.json` having no `keywords` field at all — is asserted by
+    // new-test.ts and reasoned from in duplicate-core.ts; here what matters is
+    // that the counted copy is genuinely keyword-less.
     assert.notOk(
-      'keywords' in JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')),
-      'premise: the core package carries no keywords field at all, so it IS "a package without the keyword"'
+      'keywords' in JSON.parse(readFileSync(join(appLocalCore, 'package.json'), 'utf8')),
+      'premise: the copy this test counts carries no keywords field, so it IS "a package without the keyword"'
     );
     assert.strictEqual(
       coreSeenBy(moduleDir)?.root,
       appLocalCore,
-      'the module would import the app-level copy, which no module declares'
+      'the module would import the app-level copy, which no module need declare'
     );
     assert.strictEqual(foreign.length, 1, 'and that copy is COUNTED — the check reports it');
 
@@ -797,6 +822,58 @@ module('[Unit] duplicate-core detector', function(hooks) {
     assert.ok(
       message.includes('ESM resolution walk'),
       'it names what is enumerated instead — the walk each discovered module would resolve through'
+    );
+  });
+
+  // D23 — THE FIRST-COPY AND SHADOWING CLAUSE, PINNED BEHAVIOURALLY.
+  //
+  // The scope paragraph's closing clause — "takes the FIRST copy that walk
+  // finds ... A copy no module's walk reaches first is not counted, and one
+  // further up a walk is hidden by a nearer one" — is the correction the round-2
+  // rewrite was made for, and until this test it was the one clause no
+  // assertion touched: all of D22's assertions pass against the exact
+  // over-claim it replaced ("a copy owned by any package on that walk is
+  // counted"), because none of them puts two copies on one walk.
+  //
+  // D18 pins shadowing in the direction where the shadowed copy is the CORRECT
+  // one, so it cannot show the "not counted" half — the copy being hidden there
+  // is the running core, which was never going to be reported. Here both copies
+  // are foreign, so the count is the measurement: two copies on one walk, one
+  // row.
+  //
+  // WALK ORDER, which is the whole reason this discriminates. From
+  // `<app>/node_modules/@stonyx/d23-mod` the candidates are that dir's own
+  // `node_modules`, then `@stonyx/node_modules`, then
+  // `<app>/node_modules/node_modules` (`levels: 1`), then `<app>/node_modules`
+  // (`levels: 0`). So `levels: 1` is the NEARER copy and `levels: 0` is the one
+  // further up — the opposite of what the directory nesting reads like, and the
+  // reason the assertions name the roots rather than the levels.
+  test('D23: with two copies on one walk the nearer is taken and the further is not counted', function(assert) {
+    const rootPath = root({ name: 'd23-app' });
+    installModule(rootPath, '@stonyx/d23-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+
+    const further = installEsmNestedCore(rootPath, '0.0.0-further-up', 0);
+    const nearer = installEsmNestedCore(rootPath, '0.0.0-nearer', 1);
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d23-mod');
+    const modules = [ { name: '@stonyx/d23-mod', dir: moduleDir } ];
+    const foreign = findForeignCores(modules);
+
+    assert.notStrictEqual(nearer, further, 'premise: two distinct copies are installed on the one walk');
+    assert.strictEqual(coreSeenBy(moduleDir)?.root, nearer, 'the FIRST copy the walk finds is the one reported');
+    assert.strictEqual(coreSeenBy(moduleDir)?.version, '0.0.0-nearer', 'with the version of that copy, not the other');
+    assert.strictEqual(foreign.length, 1, 'and it is ONE row: the further copy is hidden, not a second finding');
+
+    const message = duplicateCoreMessage(foreign);
+
+    assert.ok(message.includes(nearer), 'the nearer copy is printed');
+    assert.notOk(message.includes(further), 'and the copy further up the same walk is not — which is what "hidden by a nearer one" means');
+    assert.ok(
+      message.includes('takes the FIRST copy that walk finds'),
+      `so the scope paragraph must keep saying so, got: ${message}`
+    );
+    assert.ok(
+      message.includes('one further up a walk is hidden by a nearer one'),
+      'and must keep stating the consequence this test just measured'
     );
   });
 

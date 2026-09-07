@@ -462,7 +462,7 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
     // duplicate-INSTALL remedy branch above was written for. The sentence now
     // names what is ENUMERATED — the resolution walk — instead of closing a set
     // of packages, because the enumeration is a property the code has and the
-    // set is not. D20 pins it against a fixture that counts such a copy.
+    // set is not. D22 pins it against a fixture that counts such a copy.
     //
     // "FIRST copy that walk finds" is not padding, and it is the round-2
     // rewrite's own near-miss: `coreSeenBy` returns on the first `asCore` hit,

@@ -478,7 +478,8 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
     'de-duplicated union of both maps. What it then reports is not those packages\' own copies but ' +
     'the copy each of them would IMPORT: for every one it follows Node\'s ESM resolution walk up ' +
     'from that module\'s own directory and takes the FIRST copy that walk finds, whoever owns it — ' +
-    'including this app\'s own node_modules/stonyx, which no module declares. A copy no module\'s ' +
+    'including this app\'s own node_modules/stonyx, which no module need declare. A copy no ' +
+    'module\'s ' +
     'walk reaches first is not counted, and one further up a walk is hidden by a nearer one.',
   ].join('\n');
 }

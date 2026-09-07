@@ -213,13 +213,13 @@ cause written to stderr through a side channel and the thrown error relabelled
 configurations. Module "<name>" failed to load.` — a message wrong about both the file
 and the module. Both of those behaviours are gone; the message no longer exists.
 
-**Two limits of the pre-flight, so absence of a refusal is still not proof.** The
+**Limits of the pre-flight, so absence of a refusal is still not proof.** The
 modules it starts from are the `@stonyx/*` packages in the application's `dependencies`
 or `devDependencies` that carry the `stonyx-module` keyword, and it compares physical
 package roots rather than version ranges. From each of those modules it follows Node's
 ESM resolution walk and reports the FIRST copy that walk finds — the one that module
 would import — whoever owns it, including `<app>/node_modules/stonyx`, which no module
-declares. A copy no module's walk reaches first is not counted, and one further up a
+need declare. A copy no module's walk reaches first is not counted, and one further up a
 walk is hidden by a nearer one. And it fails **open** — an unreadable or unparseable
 manifest, or a running core that cannot identify itself, produces a `console.warn`
 naming the probe and no refusal.
@@ -290,7 +290,12 @@ instantiates it and resolves its `waitForModule` promise immediately, because th
 nothing to wait for. Note the consequence of `init()` being optional — a `static async
 init()` typo is indistinguishable from no `init()` to the loader, so waiters are
 released while the instance's own initialization never ran. Before abofs/stonyx#106
-that shape hung the boot instead.
+that shape left every waiter on it pending forever, and hung the boot only when the
+waiter was itself another module's `init()` — a module with no `init()` contributes
+nothing to the `Promise.all` the loader awaits, so it cannot hang the boot on its own.
+Measured at base `5693744` against a one-module app: `loadModules` settled in 15 ms
+with the module loaded, while `waitForModule` on it was still pending at a 2000 ms cap.
+(Measured at `760fc05`: settles in 12 ms and `waitForModule` resolves.)
 
 ## Module Lifecycle
 
@@ -333,13 +338,39 @@ with only a `console.warn`. It now throws in milliseconds. That is a behaviour c
 a supervisor that previously saw a container which never became ready now sees a named
 crash.
 
-**Circular waits deadlock the boot, and nothing detects the cycle.** If two async
+**Circular waits deadlock the boot, and the process then exits 0.** If two async
 modules each `await waitForModule` on the other — or a module waits on its own name,
 which is a one-character copy-paste slip in a module that waits on several siblings —
-neither `init()` ever settles, the `Promise.all` the loader awaits over every `init()`
-never resolves, and `loadModules` hangs with no error, no timeout and no exit code.
-The loader cannot detect it: `waitForModule` is told which module is being waited
-**for** and never which module is doing the waiting, and Stonyx sets no boot timeout.
+neither `init()` ever settles and the `Promise.all` the loader awaits over every
+`init()` never resolves.
+
+**What you observe is not a hang.** `stonyx serve` prints whatever those `init()`s
+logged before they parked, then exits with **status 0** in tens of milliseconds, and
+your entry point is never imported. Measured at `760fc05` against a two-module app
+whose `init()`s await each other across `dependencies` and `devDependencies`: two log
+lines, `EXIT CODE = 0`, 58 ms, and the app's own `app.js` never reached. The mechanism
+is that boot holds no handle — `src/cli.ts` calls `main().catch(...)` with no
+top-level `await`, and `serve` registers its `SIGTERM`/`SIGINT` handlers only *after*
+`await Stonyx.ready` — so once every `init()` is parked on a promise nothing will
+settle, the event loop drains and Node exits cleanly.
+
+Status 0 is the part to plan for, because supervisors read it as success: systemd
+`Restart=on-failure`, a Kubernetes `restartPolicy: OnFailure` and a CI step written
+`stonyx serve && run-smoke-tests` all decline to act on it. The console symptom is a
+service that prints a line or two and exits without an error. This predates
+abofs/stonyx#106 — a `devDependencies`-only pair deadlocked and exited 0 at base
+`5693744` too — but rule 3 widened which manifests can reach it, since cross-map and
+`dependencies`-only pairs used to fail fast instead.
+
+**The loader does not detect the cycle, and that is a scope decision rather than an
+impossibility.** `waitForModule` is told which module is being waited **for** and never
+which module is doing the waiting, so there is no caller attribution to build a cycle
+graph from, and Stonyx sets no boot timeout to hang a fallback off — which is why the
+*cycle* itself is not identifiable here. Detecting the *deadlock*, as opposed to the
+cycle, does not need either of those; it is tracked separately and is out of scope for
+the change that added this section. Read this section as "not detected today", not as
+"undetectable".
+
 Keep the wait graph acyclic. If two modules genuinely need each other, one of them
 should do its part of the work in `startup()` — which runs after every `init()` has
 completed — rather than waiting for its peer inside `init()`.

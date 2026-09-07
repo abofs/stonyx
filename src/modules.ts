@@ -167,9 +167,17 @@ export default async function loadModules(
   // A bare `[ ...Object.keys(deps), ...Object.keys(devDeps) ]` concat instantiates
   // a dual-declared module twice and runs its `init()` twice. That WOULD be
   // invisible to the suite aggregate were T22 not armed; T22's instance-count
-  // assertion is what makes it visible. Measured at this head with the concat
-  // seeded: 178/1 with T22 the sole failure, both of its counts reading actual 2
-  // against expected 1.
+  // assertion is what makes it visible. With the concat seeded, T22 is the SOLE
+  // failure and both of its counts read actual 2 against expected 1 — measured
+  // 180 pass / 1 fail at f575a3c, out of a 181-test suite.
+  //
+  // The SHA is not decoration. This sentence replaced one that round 1 found
+  // false, and its replacement carried a figure measured at the PREVIOUS head
+  // under the words "at this head": 178/1, which cannot reconcile against a
+  // 181-test suite at all. Four reviewers caught it independently. A bare
+  // aggregate has no author and no date, so it rots silently on the next commit
+  // that adds a test; an aggregate with the SHA it was taken at stays true
+  // forever and tells the next reader exactly what to re-run.
   const declaredDependencies = {
     ...(rootPackage.dependencies || {}),
     ...(rootPackage.devDependencies || {}),

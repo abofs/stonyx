@@ -678,9 +678,10 @@ module('[Unit] loadModules', function(hooks) {
 
     assert.strictEqual(
       await raceModuleOutcome('t13-nokey'),
-      'rejected: Could wait for module: @stonyx/t13-nokey. It IS declared in this project\'s dependencies, but the ' +
-      'loader did not load it: either it is not installed under node_modules, or its package.json does ' +
-      'not carry the "stonyx-module" keyword. loadModules warned which one at load time.',
+      'rejected: Could wait for module: @stonyx/t13-nokey. It IS declared in this project\'s ' +
+      'dependencies or devDependencies, but the loader did not load it: either it is not ' +
+      'installed under node_modules, or its package.json does not carry the "stonyx-module" ' +
+      'keyword. loadModules warned which one at load time.',
       'the keyword-rejected module is not registered at all, so waitForModule throws — and names the ' +
       'real cause, because the name IS in the manifest'
     );
@@ -770,17 +771,19 @@ module('[Unit] loadModules', function(hooks) {
 
     assert.strictEqual(
       await raceModuleOutcome('t23-absent'),
-      'rejected: Could wait for module: @stonyx/t23-absent. It IS declared in this project\'s dependencies, but the ' +
-      'loader did not load it: either it is not installed under node_modules, or its package.json does ' +
-      'not carry the "stonyx-module" keyword. loadModules warned which one at load time.',
+      'rejected: Could wait for module: @stonyx/t23-absent. It IS declared in this project\'s ' +
+      'dependencies or devDependencies, but the loader did not load it: either it is not ' +
+      'installed under node_modules, or its package.json does not carry the "stonyx-module" ' +
+      'keyword. loadModules warned which one at load time.',
       'the missing-manifest continue path leaves no dangling promise, and the throw does not deny the ' +
       'declaration it can see'
     );
     assert.strictEqual(
       await raceModuleOutcome('t23-nokey'),
-      'rejected: Could wait for module: @stonyx/t23-nokey. It IS declared in this project\'s dependencies, but the ' +
-      'loader did not load it: either it is not installed under node_modules, or its package.json does ' +
-      'not carry the "stonyx-module" keyword. loadModules warned which one at load time.',
+      'rejected: Could wait for module: @stonyx/t23-nokey. It IS declared in this project\'s ' +
+      'dependencies or devDependencies, but the loader did not load it: either it is not ' +
+      'installed under node_modules, or its package.json does not carry the "stonyx-module" ' +
+      'keyword. loadModules warned which one at load time.',
       'nor does the missing-keyword continue path, and it too reports declared-but-not-loaded'
     );
   });

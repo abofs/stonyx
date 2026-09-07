@@ -27,10 +27,29 @@ const modulePromises: Record<string, DeferredPromise> = {};
 // and this is the only question it needs answered: "is this name in the
 // manifest?" is exactly what `modulePromises` stopped being able to answer.
 //
-// Reassigned per `loadModules` call rather than accumulated, so it tracks the
-// manifest of the most recent load exactly as `modulePromises` tracks that
-// load's discovery — one derived fact, one lifetime, rather than a second
-// singleton drifting away from the first.
+// Reassigned per `loadModules` call rather than accumulated, because only the
+// current manifest can answer for the current boot — a name declared by an
+// earlier load must not answer for this one.
+//
+// It is NOT symmetric with `modulePromises`, and the asymmetry is worth
+// stating because the obvious reading of the line above is that it is.
+// `modulePromises` has no reset: no `delete`, no reassignment, no clear, at
+// any commit on `dev`. It accumulates the union of every `loadModules` call in
+// the process while this set is replaced per call. Measured over three loads
+// in one process at c87826b: load A declares and installs
+// `@stonyx/probe-life`; load B declares it with the package absent, so
+// discovery warns and `continue`s and registers nothing — and
+// `waitForModule('probe-life')` still RESOLVES, off load A's stale entry.
+// That is the "reports success for a module never loaded, silently" outcome
+// the registration loop below calls worse than the hang; T23 forecloses that
+// remedy WITHIN one call and no test sees across calls.
+//
+// Inherited, not introduced here — `modulePromises` was never reset at base
+// 5693744 either — and deliberately not closed here, because giving it a
+// per-call lifetime has a blast radius of its own and is filed separately.
+// Production reachability is nil: one `loadModules` call site, guarded by the
+// `Stonyx.instance` early return. The suite is held safe by the
+// unique-module-name-per-test rule in this file's test header, not by this.
 let declaredModuleNames: ReadonlySet<string> = new Set();
 
 // Configure module-specific logging
@@ -57,8 +76,9 @@ function initializeModule(
   // which is never created. Third of the three never-resolved paths named in
   // #120, and the one that scoping registration to `discovered` does NOT close,
   // because such a module IS discovered — measured, not reasoned: with only
-  // the registration fix applied the suite read 180/1 with T24 the sole
-  // failure. Resolving here is readiness BY DEFINITION — there is no `init()`,
+  // the registration fix applied the suite read 180 pass / 1 fail at f575a3c
+  // with T24 the sole failure. The SHA is the point; see the aggregate
+  // convention noted at the `declaredDependencies` union below. Resolving here is readiness BY DEFINITION — there is no `init()`,
   // so there is nothing to wait for — and that is what separates it from
   // resolving on a discovery `continue`, where there is no module to be ready
   // at all.
@@ -277,13 +297,18 @@ export default async function loadModules(
   // change: hang becomes throw — and the throw names the right cause, because
   // `modulePromises` is no longer the app's declared list and `waitForModule`
   // below branches on that difference rather than asserting the old one. T13
-  // pins both halves, and the PR body names them.
+  // pins the hang-becomes-throw change and the named cause; the PR body names
+  // them. ("Halves" is avoided here because T13 uses that word for its own
+  // input-domain split — the `devDependencies` half it covers and the
+  // `dependencies` half it hands to T23.)
   //
   // SCOPED DELIBERATELY, because the sentence above would otherwise read as a
   // closure statement for the whole never-settling-promise family and it is
   // not one. What it closes is names that FAIL discovery. A name that PASSES
-  // discovery is registered, and its promise is resolved only once its own
-  // `init()` has settled — so two discovered modules whose `init()`s await
+  // discovery is registered, and where its class HAS an `init()` its promise
+  // is resolved only once that `init()` has settled — the qualifier matters,
+  // because two of the three resolve sites named above settle without any
+  // `init()` running. So two discovered modules whose `init()`s await
   // each other through `waitForModule` are both registered, reach no resolve
   // site, and leave `await Promise.all(initPromises)` at the end of this
   // function pending forever. Measured on a cross-map mutual wait
@@ -293,6 +318,10 @@ export default async function loadModules(
   //                   discovered, so it failed fast for the wrong reason
   //     a57045e       HUNG, 3001 ms
   //     f575a3c       HUNG, 3003 ms — scoping registration does not touch it
+  //     c87826b       HUNG, 3002 ms — re-measured at the head this ships from,
+  //                   because the rows above stop before three commits that
+  //                   touch this file and a reader at head cannot tell from a
+  //                   truncated table whether the row still applies
   // Rule 3 moves that shape from fail-fast to deadlock and nothing in this
   // file closes it.
   //
@@ -424,9 +453,10 @@ export async function waitForModule(moduleName: string): Promise<void> {
 
   if (!modulePromise) {
     throw new Error(declaredModuleNames.has(fullName)
-      ? `Could wait for module: ${fullName}. It IS declared in this project's dependencies, but the ` +
-        'loader did not load it: either it is not installed under node_modules, or its package.json ' +
-        'does not carry the "stonyx-module" keyword. loadModules warned which one at load time.'
+      ? `Could wait for module: ${fullName}. It IS declared in this project's dependencies or ` +
+        'devDependencies, but the loader did not load it: either it is not installed under ' +
+        'node_modules, or its package.json does not carry the "stonyx-module" keyword. ' +
+        'loadModules warned which one at load time.'
       : `Could wait for module: ${fullName}. Module was not registered in project dependencies`);
   }
 

@@ -663,6 +663,19 @@ module('[Unit] loadModules', function(hooks) {
       'premise: a loaded module resolves well inside the race window'
     );
 
+    // And premise second: the `continue` this test is ABOUT was actually taken.
+    // Without this the expected rejection is also the default state of a name
+    // the loader never saw, so deleting `@stonyx/t13-nokey` from the fixture's
+    // `devDependencies` — leaving the package on disk — left this test green.
+    // Measured before this assertion existed. The warning is the loader's own
+    // record of reaching the keyword branch, and this test already captured it
+    // and threw it away.
+    assert.deepEqual(
+      capture.warnings,
+      [ 'Warning: Stonyx modules must contain the "stonyx-module" keyword. Module was not loaded' ],
+      'premise: discovery really did reach the missing-keyword continue for this fixture'
+    );
+
     assert.strictEqual(
       await raceModuleOutcome('t13-nokey'),
       'rejected: Could wait for module: @stonyx/t13-nokey. It IS declared in this project\'s dependencies, but the ' +
@@ -737,6 +750,21 @@ module('[Unit] loadModules', function(hooks) {
       'premise: a dependencies-declared module is still discovered and still resolves'
     );
 
+    // And that BOTH `continue`s were actually taken. The expected rejections
+    // below are also the default state of a name the loader never saw, so
+    // deleting either name from the fixture's `dependencies` — leaving the
+    // package on disk — left this test green. Measured before this assertion
+    // existed. These two warnings are the loader's own record of reaching each
+    // branch, in discovery order, and this test already captured them.
+    assert.deepEqual(
+      capture.warnings,
+      [
+        'Warning: Could not locate stonyx module: "@stonyx/t23-absent". Module was not loaded',
+        'Warning: Stonyx modules must contain the "stonyx-module" keyword. Module was not loaded',
+      ],
+      'premise: discovery reached the missing-manifest continue and then the missing-keyword one'
+    );
+
     assert.strictEqual(
       await raceModuleOutcome('t23-absent'),
       'rejected: Could wait for module: @stonyx/t23-absent. It IS declared in this project\'s dependencies, but the ' +
@@ -783,6 +811,32 @@ module('[Unit] loadModules', function(hooks) {
       'resolved',
       'a loaded module with nothing to initialise is ready, not pending forever'
     );
+  });
+
+  // T25 — PINS THE OPTIONAL CHAIN in `initializeModule`'s no-`init()` early
+  // return. That chain shipped in fix round 1 with zero coverage: replacing
+  // `?.` with `!` left the suite at 181 pass / 0 fail, so the suite could not
+  // tell whether the guard was there.
+  //
+  // It is load-bearing, on the STANDALONE path. `initializeModule` is reached
+  // there as `initializeModule(projectName, …)`, and `projectName` — the root
+  // package's own name — is never a key in `modulePromises`, which holds only
+  // `@stonyx/`-prefixed declared names. T10 covers the standalone path, but its
+  // fixture comes from `moduleSource()`, which always ships an `init()`, so
+  // T10 never reaches the early return. Measured directly against this fixture
+  // with the `?.` removed: loadModules THREW "Cannot read properties of
+  // undefined (reading 'resolve')" — and `stonyx new` can produce this shape.
+  //
+  // Dies under: `modulePromises[moduleName]?.resolve()` -> `!.resolve()` in the
+  // no-`init()` early return.
+  test('a standalone root whose class has no init() loads without touching an unregistered promise', async function(assert) {
+    const rootPath = root({ name: 'stonyx-t25-standalone', keywords: [ 'stonyx-module' ], main: 'main.js' });
+    writeRootFile(rootPath, 'main.js', 'export default class T25Standalone {}\n');
+
+    const modules = await loadModules({}, rootPath, stubChronicle().asChronicle());
+
+    assert.strictEqual(modules.length, 1, 'the standalone root was loaded rather than throwing');
+    assert.strictEqual(modules[0]!.constructor.name, 'T25Standalone', 'and instantiated, despite having no init()');
   });
 
   // ---------------------------------------------------------------------

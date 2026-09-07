@@ -36,6 +36,7 @@
 
 - The module loader uses `kebabCaseToCamelCase` to convert package names (e.g., `@stonyx/rest-server` becomes `restServer` config key) — config key mismatches are a common integration issue
 - Standalone module mode (when `rootPath` contains `stonyx-`) transforms config structure differently to support running modules in isolation during development
-- `Stonyx.modulePromises` is populated before any module `init()` runs, so `waitForModule` is safe to call from any module's `init()` without race conditions
+- The loader's deferred-promise map is populated before any module `init()` runs, so `waitForModule` never races registration — but "safe to call from any `init()`" no longer follows. Since abofs/stonyx#106 the map holds only the modules discovery ADMITTED, so `waitForModule` on a declared-but-not-loaded name throws from inside `init()`, rejecting the `Promise.all` and failing the boot (intended: it used to hang), and two modules awaiting each other deadlock with no diagnostic. See [Module System](../modules.md#waitformodule)
+- The map is the module-level `modulePromises` in `src/modules.ts`. `Stonyx.modulePromises` (`src/main.ts`) is a dead static — nothing has ever written it, at any commit on `dev`
 - The `postinstall` script handles first-time setup; `prepublishOnly` runs the full test suite before npm publish
 - Exports are split across subpaths: `stonyx/config`, `stonyx/log`, `stonyx/test-helpers`, `stonyx/lifecycle` — consumer code imports these directly, not from the main entry

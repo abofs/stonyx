@@ -692,8 +692,11 @@ module('[Unit] loadModules', function(hooks) {
   // Rule 3 widened the discovery source, and the pre-registration loop
   // consumed the widened list directly — so every `@stonyx/*` name in
   // `dependencies` got a deferred promise, including names discovery then
-  // `continue`s past without ever resolving. There are exactly two resolve
-  // sites in `src/modules.ts` and neither is reachable from a `continue`.
+  // `continue`s past without ever resolving. There are THREE resolve sites in
+  // `src/modules.ts` — the no-`init()` early return, the `init()` wrapper, and
+  // the sync-module `continue` in the load loop — and none of them is reachable
+  // from a DISCOVERY `continue`. (This sentence said "exactly two" in the
+  // commit that added the third.)
   //
   // Reproduced end to end before the fix, driving the real `loadModules`
   // against a root with `@stonyx/orm` in `dependencies` but absent from

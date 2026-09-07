@@ -31,7 +31,10 @@ project, match it.
   install. Only the third branch offers `pin stonyx@<version>`, and that is the branch
   the upgrade scenario above usually lands in. To confirm this is what you are seeing,
   check the `seen by "…"` rows in the refusal against your `dependencies`, not only
-  your `devDependencies`. See [Version alignment](#version-alignment) and
+  your `devDependencies`. Upgrading also changes `waitForModule` for a name the loader
+  refuses to load: it now rejects, immediately and by name, where a `devDependencies`
+  declaration previously hung the boot forever. See
+  [waitForModule](#waitformodule), [Version alignment](#version-alignment) and
   [How Modules Are Discovered](#how-modules-are-discovered).
 - **Pin the core to an exact version**, and request every module from the core's own
   release line. Never `latest` for the core — see [Why not `latest`](#why-not-latest).
@@ -280,6 +283,13 @@ export default class MyModule {
 ```
 
 All module `init()` calls run concurrently via `Promise.all`.
+
+An async module that defines no `init()` at all is a supported shape: the loader
+instantiates it and resolves its `waitForModule` promise immediately, because there is
+nothing to wait for. Note the consequence of `init()` being optional — a `static async
+init()` typo is indistinguishable from no `init()` to the loader, so waiters are
+released while the instance's own initialization never ran. Before abofs/stonyx#106
+that shape hung the boot instead.
 
 ## Module Lifecycle
 

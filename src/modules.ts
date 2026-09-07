@@ -58,9 +58,22 @@ function initializeModule(
   // #120, and the one that scoping registration to `discovered` does NOT close,
   // because such a module IS discovered — measured, not reasoned: with only
   // the registration fix applied the suite read 180/1 with T24 the sole
-  // failure. Resolving here is truthful, because the module really did load,
-  // and that is what separates it from resolving on a discovery `continue`,
-  // where there is no module to be ready.
+  // failure. Resolving here is readiness BY DEFINITION — there is no `init()`,
+  // so there is nothing to wait for — and that is what separates it from
+  // resolving on a discovery `continue`, where there is no module to be ready
+  // at all.
+  //
+  // It is deliberately NOT the stronger claim that the module initialised.
+  // `waitForModule` is documented as blocking until a module "finishes
+  // initializing", and a `static async init()` typo — which TypeScript cannot
+  // catch, since `init?()` is optional in lifecycle.ts — presents to the loader
+  // as a class with no `init()`. This resolves it, and the waiter proceeds
+  // against a module whose own initialisation never ran; measured, the waiter
+  // observes the module's ready flag still false. The loader cannot tell that
+  // typo from a legitimate no-`init()` module, and a no-`init()` module is a
+  // supported shape, so resolving is the only non-hanging answer available and
+  // availability over a silent hang is the right trade. The claim is what is
+  // narrowed here, not the behaviour.
   //
   // `?.` for the reason the resolve below carries it: `initializeModule` is
   // also reached from the standalone path as `initializeModule(projectName, …)`,
@@ -241,8 +254,16 @@ export default async function loadModules(
   // contains, and the widening turned a fast named throw into an unbounded
   // boot hang. A name registered here but never resolved leaves
   // `waitForModule` pending forever; discovery `continue`s past two kinds of
-  // name without reaching either of this file's two resolve sites — a manifest
+  // name without reaching ANY of this file's three resolve sites — a manifest
   // that is not there, and a package without the `stonyx-module` keyword.
+  // Three, not the two this sentence claimed when it was written: the
+  // no-`init()` early return in `initializeModule` is a resolve site and the
+  // commit that wrote this sentence is the commit that added it. The sites are
+  // named rather than numbered by line, because the comment above
+  // `initializeModule` reasons from this inventory and a stale count sends the
+  // next dangling-promise audit one site short — they are the no-`init()`
+  // early return, the `init()` wrapper, and the sync-module `continue` in the
+  // load loop.
   // `@stonyx/logs` ships without that keyword and is an ordinary `dependencies`
   // entry, so this is a shape the fleet actually has.
   //

@@ -821,8 +821,8 @@ module('[Unit] loadModules', function(hooks) {
 
   // T25 — PINS THE OPTIONAL CHAIN in `initializeModule`'s no-`init()` early
   // return. That chain shipped in fix round 1 with zero coverage: replacing
-  // `?.` with `!` left the suite at 181 pass / 0 fail, so the suite could not
-  // tell whether the guard was there.
+  // `?.` with `!` left the suite at 181 pass / 0 fail at f575a3c, so the suite
+  // could not tell whether the guard was there.
   //
   // It is load-bearing, on the STANDALONE path. `initializeModule` is reached
   // there as `initializeModule(projectName, …)`, and `projectName` — the root
@@ -843,6 +843,78 @@ module('[Unit] loadModules', function(hooks) {
 
     assert.strictEqual(modules.length, 1, 'the standalone root was loaded rather than throwing');
     assert.strictEqual(modules[0]!.constructor.name, 'T25Standalone', 'and instantiated, despite having no init()');
+  });
+
+  // T26 — THE SUPERSET DIRECTION of `declaredModuleNames`, which was the one
+  // uncovered direction and is the one that prints the declared-but-not-loaded
+  // sentence.
+  //
+  // The subset direction was already caught: seeding
+  // `new Set(moduleDependencies.slice(1))` reads 182/1 at c87826b with T23 the
+  // sole failure. The other way round was a SURVIVOR — seeding
+  // `new Set([ ...moduleDependencies, '@stonyx/ghost' ])` read 183 pass / 0
+  // fail at c87826b, because every name the suite asserted the set through was
+  // also a name in `moduleDependencies`. Nothing constrained the set from
+  // holding a name the app never declared, and that is the branch that tells
+  // the operator "It IS declared in this project's dependencies or
+  // devDependencies" — i.e. abofs/stonyx#108's names-the-wrong-cause defect,
+  // pointed the other way.
+  //
+  // THE FIXTURE IS THE POINT. `@stonyx/t26-undeclared` is installed under
+  // `node_modules` with both keywords and a valid config — everything except a
+  // manifest entry. Discovery is driven by the MANIFEST, not by the
+  // filesystem, so it is never scanned, never registered, and `waitForModule`
+  // must reach the NOT-DECLARED sentence. That kills any superset built from
+  // the wrong source: the installed set, the discovered set, a `readdir` of
+  // `node_modules`, or the union of this load with a previous one.
+  //
+  // WHAT IT CANNOT KILL, stated rather than implied: a superset seeded with an
+  // arbitrary literal that this fixture does not name. No finite test closes
+  // that, and no realistic regression produces it — a wrong SOURCE for the set
+  // is the shape that ships, and the source is what this pins.
+  //
+  // Dies under: any `declaredModuleNames` assignment that admits a name absent
+  // from the app's `dependencies` ∪ `devDependencies`.
+  test('a name installed but declared in NEITHER map is reported as not declared, not as declared-but-not-loaded', async function(assert) {
+    const rootPath = root({
+      name: 't26-app',
+      dependencies: { '@stonyx/t26-real': '1.0.0' },
+    });
+
+    installAsyncModule(rootPath, '@stonyx/t26-real', 'T26Real');
+    // Installed and perfectly loadable — and declared nowhere.
+    installAsyncModule(rootPath, '@stonyx/t26-undeclared', 'T26Undeclared');
+
+    const capture = captureConsole();
+    let modules;
+
+    try {
+      modules = await loadModules({}, rootPath, stubChronicle().asChronicle());
+    } finally {
+      capture.restore();
+    }
+
+    assert.strictEqual(
+      await raceModule('t26-real'),
+      'resolved',
+      'premise: the declared module IS discovered, so the loader ran normally over this fixture'
+    );
+    assert.deepEqual(capture.warnings, [], 'premise: and nothing was skipped — the undeclared package was never even looked at');
+    assert.strictEqual(modules.length, 1, 'the undeclared package is not loaded: discovery reads the manifest, not node_modules');
+
+    assert.strictEqual(
+      await raceModuleOutcome('t26-undeclared'),
+      'rejected: Could wait for module: @stonyx/t26-undeclared. Module was not registered in ' +
+      'project dependencies',
+      'so waitForModule takes the NOT-DECLARED branch for it'
+    );
+
+    const outcome = await raceModuleOutcome('t26-undeclared');
+
+    assert.notOk(
+      outcome.includes('It IS declared'),
+      `and must not claim the manifest contains it, got: ${outcome}`
+    );
   });
 
   // ---------------------------------------------------------------------

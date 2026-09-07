@@ -19,6 +19,20 @@ export type StoynxConfig = Record<string, Record<string, unknown> | unknown>;
 
 const modulePromises: Record<string, DeferredPromise> = {};
 
+// The `@stonyx/*` names this app DECLARED — which since PR #120 fix round 1 is
+// a strictly WIDER set than the keys of `modulePromises`. Registration is now
+// scoped to what discovery admitted, so a declared name whose manifest is
+// missing, or whose manifest carries no `stonyx-module` keyword, is in this set
+// and not in that map. `waitForModule`'s failure branch is the only consumer,
+// and this is the only question it needs answered: "is this name in the
+// manifest?" is exactly what `modulePromises` stopped being able to answer.
+//
+// Reassigned per `loadModules` call rather than accumulated, so it tracks the
+// manifest of the most recent load exactly as `modulePromises` tracks that
+// load's discovery — one derived fact, one lifetime, rather than a second
+// singleton drifting away from the first.
+let declaredModuleNames: ReadonlySet<string> = new Set();
+
 // Configure module-specific logging
 function configureLog(chronicle: Chronicle, module: string, config: Record<string, unknown>): void {
   const { logColor, logMethod, logTimestamp } = config;
@@ -174,6 +188,8 @@ export default async function loadModules(
     (moduleName: string) => moduleName.startsWith('@stonyx/')
   );
 
+  declaredModuleNames = new Set(moduleDependencies);
+
   // DISCOVERY, hoisted above the pre-flight.
   //
   // The pre-flight must check exactly what the loader loads, and no more.
@@ -229,7 +245,10 @@ export default async function loadModules(
   // Registering only what discovery admitted restores the fail-fast for both
   // of those DISCOVERY FAILURES, and for `devDependencies`-declared names too
   // — that half is INHERITED, not introduced here, and it is a real behaviour
-  // change: hang becomes throw. T13 pins it, and the PR body names it.
+  // change: hang becomes throw — and the throw names the right cause, because
+  // `modulePromises` is no longer the app's declared list and `waitForModule`
+  // below branches on that difference rather than asserting the old one. T13
+  // pins both halves, and the PR body names them.
   //
   // SCOPED DELIBERATELY, because the sentence above would otherwise read as a
   // closure statement for the whole never-settling-promise family and it is
@@ -345,11 +364,42 @@ export default async function loadModules(
   return modules;
 }
 
+/**
+ * Blocks until `@stonyx/<moduleName>` has finished initializing.
+ *
+ * TWO failure sentences, because one sentence stopped being able to carry both
+ * facts. Until PR #120 fix round 1 `modulePromises` held every DECLARED
+ * `@stonyx/*` name, so "absent from the map" and "absent from the manifest"
+ * were the same fact and the single inherited sentence was true. Registration
+ * is now scoped to the DISCOVERED set — which is what removes the boot hang,
+ * see the registration loop in `loadModules` — so absence from the map has two
+ * causes, and the inherited sentence is FALSE for one of them: it tells the
+ * operator the package is not in their dependencies while it is sitting in
+ * their manifest.
+ *
+ * Not hypothetical, and not a shape this repo has to imagine: `@stonyx/logs`
+ * ships without the `stonyx-module` keyword and is an ordinary `dependencies`
+ * entry of THIS package.json. An app in the same shape calling
+ * `waitForModule('logs')` would be sent to grep a manifest that already
+ * contains the answer. Naming the wrong cause is the defect abofs/stonyx#108
+ * was filed over, and it is not made acceptable by being one line long.
+ *
+ * The declared branch does not say WHICH of the two causes applies, because
+ * this function does not know. Discovery does, and it already `console.warn`s
+ * the specific reason at load time, so the message points at that warning
+ * rather than guessing between them.
+ */
 export async function waitForModule(moduleName: string): Promise<void> {
   const fullName = `@stonyx/${moduleName}`;
   const modulePromise = modulePromises[fullName];
 
-  if (!modulePromise) throw new Error(`Could wait for module: ${fullName}. Module was not registered in project dependencies`);
+  if (!modulePromise) {
+    throw new Error(declaredModuleNames.has(fullName)
+      ? `Could wait for module: ${fullName}. It IS declared in this project's dependencies, but the ` +
+        'loader did not load it: either it is not installed under node_modules, or its package.json ' +
+        'does not carry the "stonyx-module" keyword. loadModules warned which one at load time.'
+      : `Could wait for module: ${fullName}. Module was not registered in project dependencies`);
+  }
 
-  await modulePromises[fullName].ready;
+  await modulePromise.ready;
 }

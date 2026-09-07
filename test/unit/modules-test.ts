@@ -503,8 +503,9 @@ module('[Unit] loadModules', function(hooks) {
   // module loads and `waitForModule` on it throws "was not registered"
   // forever, with the suite fully green. The line above splits them: still
   // 99/0 under a correct rule 3, but 98/1 with this test the SOLE failure
-  // under the desync, rejecting with "Could wait for module:
-  // @stonyx/t21-sync. Module was not registered in project dependencies".
+  // under the desync, rejecting by name from `waitForModule` (today that is
+  // its declared-but-not-loaded branch, since `t21-sync` IS declared; the
+  // wording is quoted nowhere here because it drifts and the branch does not).
   //
   // And if this test reds at `:97` inside #106, adding `?.` there is NOT the
   // fix. `modules.ts:43` already carries that exact optional chain three lines
@@ -537,9 +538,9 @@ module('[Unit] loadModules', function(hooks) {
 
     // abofs/stonyx#106 AC2 — the INVARIANT, not the symptom. "Does not throw"
     // survives the `?.`-at-the-sync-resolve shortcut; "every discovered module
-    // is pre-registered" does not. Under that shortcut this rejects with
-    // "Could wait for module: @stonyx/t21-sync. Module was not registered in
-    // project dependencies" while the aggregate count is otherwise identical.
+    // is pre-registered" does not. Under that shortcut this rejects from
+    // `waitForModule` naming `@stonyx/t21-sync` while the aggregate count is
+    // otherwise identical.
     assert.strictEqual(
       await raceModule('t21-sync'),
       'resolved',
@@ -625,9 +626,17 @@ module('[Unit] loadModules', function(hooks) {
   //     a caller awaiting a module the loader refused to load has no correct
   //     outcome, and the named throw is the diagnosable one.
   //
+  // The EXPECTED MESSAGE is the declared-but-not-loaded branch of
+  // `waitForModule`, not the inherited one. `t13-nokey` is in this fixture's
+  // `devDependencies`, so the inherited sentence — "Module was not registered
+  // in project dependencies" — would be false about this very fixture. Round 1
+  // pinned that false sentence here verbatim; this is the correction, and it is
+  // why the assertion is on the exact text rather than on a substring.
+  //
   // Dies under: restoring pre-registration over the full `moduleDependencies`
-  // list (reads `TIMEOUT`), or resolving the promise before the `continue`
-  // (reads `resolved` — the silently-wrong shape, see T23).
+  // list (reads `TIMEOUT`), resolving the promise before the `continue` (reads
+  // `resolved` — the silently-wrong shape, see T23), or collapsing
+  // `waitForModule` back to one sentence (reads the inherited message).
   test('a keyword-rejected module is not registered, so waitForModule fails fast instead of hanging', async function(assert) {
     const rootPath = root({
       name: 't13-app',
@@ -656,8 +665,11 @@ module('[Unit] loadModules', function(hooks) {
 
     assert.strictEqual(
       await raceModuleOutcome('t13-nokey'),
-      'rejected: Could wait for module: @stonyx/t13-nokey. Module was not registered in project dependencies',
-      'the keyword-rejected module is not registered at all, so waitForModule throws by name'
+      'rejected: Could wait for module: @stonyx/t13-nokey. It IS declared in this project\'s dependencies, but the ' +
+      'loader did not load it: either it is not installed under node_modules, or its package.json does ' +
+      'not carry the "stonyx-module" keyword. loadModules warned which one at load time.',
+      'the keyword-rejected module is not registered at all, so waitForModule throws — and names the ' +
+      'real cause, because the name IS in the manifest'
     );
   });
 
@@ -727,13 +739,18 @@ module('[Unit] loadModules', function(hooks) {
 
     assert.strictEqual(
       await raceModuleOutcome('t23-absent'),
-      'rejected: Could wait for module: @stonyx/t23-absent. Module was not registered in project dependencies',
-      'the missing-manifest continue path leaves no dangling promise'
+      'rejected: Could wait for module: @stonyx/t23-absent. It IS declared in this project\'s dependencies, but the ' +
+      'loader did not load it: either it is not installed under node_modules, or its package.json does ' +
+      'not carry the "stonyx-module" keyword. loadModules warned which one at load time.',
+      'the missing-manifest continue path leaves no dangling promise, and the throw does not deny the ' +
+      'declaration it can see'
     );
     assert.strictEqual(
       await raceModuleOutcome('t23-nokey'),
-      'rejected: Could wait for module: @stonyx/t23-nokey. Module was not registered in project dependencies',
-      'nor does the missing-keyword continue path'
+      'rejected: Could wait for module: @stonyx/t23-nokey. It IS declared in this project\'s dependencies, but the ' +
+      'loader did not load it: either it is not installed under node_modules, or its package.json does ' +
+      'not carry the "stonyx-module" keyword. loadModules warned which one at load time.',
+      'nor does the missing-keyword continue path, and it too reports declared-but-not-loaded'
     );
   });
 

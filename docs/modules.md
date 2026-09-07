@@ -296,6 +296,24 @@ await waitForModule('rest-server'); // Waits for @stonyx/rest-server
 
 > **Note:** `waitForModule` is only needed during submodule development or testing. End-user applications don't need it — the CLI ensures all modules are initialized before running your app.
 
+**Failure modes.** `waitForModule` rejects rather than hanging when the loader never
+registered the name, and the two causes are reported as different sentences because
+they send you to different places:
+
+- **Not declared** — there is no `@stonyx/<name>` entry in either dependency map:
+  `Module was not registered in project dependencies`.
+- **Declared but not loaded** — the name *is* in `dependencies` or `devDependencies`,
+  but either the package is not installed under `node_modules` or its `package.json`
+  does not carry the `stonyx-module` keyword. The message says exactly that, and
+  `loadModules` has already emitted a `Warning:` line naming which of the two applies.
+  This is the case `@stonyx/logs` produces, since it ships without the keyword.
+
+Before abofs/stonyx#106 the second case did not reject at all for a name declared in
+`devDependencies` — the promise was registered and never resolved, so the boot hung
+with only a `console.warn`. It now throws in milliseconds. That is a behaviour change:
+a supervisor that previously saw a container which never became ready now sees a named
+crash.
+
 **Circular waits deadlock the boot, and nothing detects the cycle.** If two async
 modules each `await waitForModule` on the other — or a module waits on its own name,
 which is a one-character copy-paste slip in a module that waits on several siblings —

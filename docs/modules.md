@@ -9,7 +9,10 @@ project, match it.
 
 - **The core goes in `dependencies`.** `stonyx` is a runtime dependency of the
   application: the `stonyx` binary runs your app and your `app.ts` imports from it.
-- **`@stonyx/*` modules go in `devDependencies`.** That is where the loader scans
+- **`@stonyx/*` modules go in either `dependencies` or `devDependencies`.** The
+  loader scans the de-duplicated union of both maps (abofs/stonyx#106), so either
+  placement is discovered, and declaring a module in both loads it exactly once.
+  `devDependencies` remains the conventional choice for an application
   (see [How Modules Are Discovered](#how-modules-are-discovered)).
 - **Pin the core to an exact version**, and request every module from the core's own
   release line. Never `latest` for the core — see [Why not `latest`](#why-not-latest).
@@ -189,9 +192,10 @@ configurations. Module "<name>" failed to load.` — a message wrong about both 
 and the module. Both of those behaviours are gone; the message no longer exists.
 
 **Two limits of the pre-flight, so absence of a refusal is still not proof.** It only
-looks at `@stonyx/*` packages in the application's `devDependencies` that carry the
-`stonyx-module` keyword, and it compares physical package roots rather than version
-ranges. A copy dragged in by anything else is not counted, and it fails **open** —
+looks at `@stonyx/*` packages in the application's `dependencies` or
+`devDependencies` that carry the `stonyx-module` keyword, and it compares physical
+package roots rather than version ranges. A copy dragged in by anything else is not
+counted, and it fails **open** —
 an unreadable or unparseable manifest, or a running core that cannot identify itself,
 produces a `console.warn` naming the probe and no refusal.
 
@@ -214,7 +218,9 @@ Absence of an error is not evidence of a single core. Count.
 
 ## How Modules Are Discovered
 
-Stonyx scans your project's `devDependencies` for packages prefixed with `@stonyx/`. Each matching package must include the `stonyx-module` keyword in its `package.json` to be loaded.
+Stonyx scans the de-duplicated union of your project's `dependencies` and `devDependencies` for packages prefixed with `@stonyx/`. Each matching package must include the `stonyx-module` keyword in its `package.json` to be loaded.
+
+The `@stonyx/` prefix is a **name** test that bounds the scan; the `stonyx-module` keyword is what decides whether a scanned package is actually a module. A package declared in both maps is discovered once, instantiated once, and has its `init()` run once.
 
 ```json
 {
@@ -256,7 +262,7 @@ All module `init()` calls run concurrently via `Promise.all`.
 
 ## Module Lifecycle
 
-1. **Discovery** — scan `devDependencies` for `@stonyx/*` packages
+1. **Discovery** — scan `dependencies` ∪ `devDependencies` (de-duplicated) for `@stonyx/*` packages
 2. **Validation** — verify `stonyx-module` keyword exists
 3. **Config merge** — async module defaults merged with user config
 4. **Log setup** — module-specific Chronicle log created if `logColor` is set

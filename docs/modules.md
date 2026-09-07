@@ -9,8 +9,33 @@ project, match it.
 
 - **The core goes in `dependencies`.** `stonyx` is a runtime dependency of the
   application: the `stonyx` binary runs your app and your `app.ts` imports from it.
-- **`@stonyx/*` modules go in `devDependencies`.** That is where the loader scans
-  (see [How Modules Are Discovered](#how-modules-are-discovered)).
+- **`@stonyx/*` modules go in either `dependencies` or `devDependencies`.** The
+  loader scans the de-duplicated union of both maps (abofs/stonyx#106), so either
+  placement is discovered, and declaring a module in both loads it exactly once.
+  `devDependencies` remains the conventional choice for an application.
+- **Upgrading to abofs/stonyx#106 can refuse an application that booted before.**
+  A module declared only in `dependencies` was previously never discovered, so it was
+  never loaded, never configured, and — the part that breaks — never put through the
+  duplicate-core pre-flight. It is now. An application that booted yesterday with such
+  a module silently ignored can be refused today by that check, purely by upgrading the
+  core; the five modules listed in
+  [Framework Modules](conventions/framework-modules.md#a-module-never-declares-stonyx-in-dependencies)
+  carry exactly the non-compliant pin that triggers it. The refusal is correct — the
+  module was already broken, just quietly. **Do what the message prints, not what this
+  paragraph paraphrases:** the module-author half is unconditional — republish with
+  `stonyx` in `devDependencies` plus a peer range — but the app-side half has three
+  branches and two of them say no pin works. If the modules disagree among themselves
+  the message says *"There is no consumer-side pin that fixes this"*; if every copy is
+  already at the running core's version it says *"no pin can merge them"* and tells you
+  to run one core, from this app's own `node_modules/.bin/stonyx` rather than a global
+  install. Only the third branch offers `pin stonyx@<version>`, and that is the branch
+  the upgrade scenario above usually lands in. To confirm this is what you are seeing,
+  check the `seen by "…"` rows in the refusal against your `dependencies`, not only
+  your `devDependencies`. Upgrading also changes `waitForModule` for a name the loader
+  refuses to load: it now rejects, immediately and by name, where a `devDependencies`
+  declaration previously hung the boot forever. See
+  [waitForModule](#waitformodule), [Version alignment](#version-alignment) and
+  [How Modules Are Discovered](#how-modules-are-discovered).
 - **Pin the core to an exact version**, and request every module from the core's own
   release line. Never `latest` for the core — see [Why not `latest`](#why-not-latest).
 
@@ -188,12 +213,16 @@ cause written to stderr through a side channel and the thrown error relabelled
 configurations. Module "<name>" failed to load.` — a message wrong about both the file
 and the module. Both of those behaviours are gone; the message no longer exists.
 
-**Two limits of the pre-flight, so absence of a refusal is still not proof.** It only
-looks at `@stonyx/*` packages in the application's `devDependencies` that carry the
-`stonyx-module` keyword, and it compares physical package roots rather than version
-ranges. A copy dragged in by anything else is not counted, and it fails **open** —
-an unreadable or unparseable manifest, or a running core that cannot identify itself,
-produces a `console.warn` naming the probe and no refusal.
+**Limits of the pre-flight, so absence of a refusal is still not proof.** The
+modules it starts from are the `@stonyx/*` packages in the application's `dependencies`
+or `devDependencies` that carry the `stonyx-module` keyword, and it compares physical
+package roots rather than version ranges. From each of those modules it follows Node's
+ESM resolution walk and reports the FIRST copy that walk finds — the one that module
+would import — whoever owns it, including `<app>/node_modules/stonyx`, which no module
+need declare. A copy no module's walk reaches first is not counted, and one further up a
+walk is hidden by a nearer one. And it fails **open** — an unreadable or unparseable
+manifest, or a running core that cannot identify itself, produces a `console.warn`
+naming the probe and no refusal.
 
 Absence of an error is not evidence of a single core. Count.
 
@@ -214,7 +243,9 @@ Absence of an error is not evidence of a single core. Count.
 
 ## How Modules Are Discovered
 
-Stonyx scans your project's `devDependencies` for packages prefixed with `@stonyx/`. Each matching package must include the `stonyx-module` keyword in its `package.json` to be loaded.
+Stonyx scans the de-duplicated union of your project's `dependencies` and `devDependencies` for packages prefixed with `@stonyx/`. Each matching package must include the `stonyx-module` keyword in its `package.json` to be loaded.
+
+The `@stonyx/` prefix is a **name** test that bounds the scan; the `stonyx-module` keyword is what decides whether a scanned package is actually a module. A package declared in both maps is discovered once — and for an async module, instantiated once with its `init()` run once. A **sync** module is discovered but never instantiated at all (see [Sync Modules](#sync-modules)), so "once" there means one discovery and zero instantiations.
 
 ```json
 {
@@ -228,7 +259,7 @@ Stonyx scans your project's `devDependencies` for packages prefixed with `@stony
 
 ### Sync Modules
 
-Modules with only the `stonyx-module` keyword are treated as synchronous. They are instantiated but their promise resolves immediately — no init phase is awaited.
+Modules with only the `stonyx-module` keyword are treated as synchronous. The loader resolves their `waitForModule` promise immediately and moves on: it does **not** import the module's entry point, does not construct the class, and does not call `init()`. Measured on a dual-declared sync module, `loadModules` returns `modules.length === 0` and the entry point's top-level code never runs. A sync module is therefore a declaration that something is present and ready, not code the loader executes — the duplicate-core pre-flight still covers it, because a second core in its subtree would never announce itself.
 
 ### Async Modules
 
@@ -254,13 +285,25 @@ export default class MyModule {
 
 All module `init()` calls run concurrently via `Promise.all`.
 
+An async module that defines no `init()` at all is a supported shape: the loader
+instantiates it and resolves its `waitForModule` promise immediately, because there is
+nothing to wait for. Note the consequence of `init()` being optional — a `static async
+init()` typo is indistinguishable from no `init()` to the loader, so waiters are
+released while the instance's own initialization never ran. Before abofs/stonyx#106
+that shape left every waiter on it pending forever, and hung the boot only when the
+waiter was itself another module's `init()` — a module with no `init()` contributes
+nothing to the `Promise.all` the loader awaits, so it cannot hang the boot on its own.
+Measured at base `5693744` against a one-module app: `loadModules` settled in 15 ms
+with the module loaded, while `waitForModule` on it was still pending at a 2000 ms cap.
+(Measured at `760fc05`: settles in 12 ms and `waitForModule` resolves.)
+
 ## Module Lifecycle
 
-1. **Discovery** — scan `devDependencies` for `@stonyx/*` packages
+1. **Discovery** — scan `dependencies` ∪ `devDependencies` (de-duplicated) for `@stonyx/*` packages
 2. **Validation** — verify `stonyx-module` keyword exists
 3. **Config merge** — async module defaults merged with user config
 4. **Log setup** — module-specific Chronicle log created if `logColor` is set
-5. **Instantiation** — module class is `new`'d
+5. **Instantiation** — module class is `new`'d (async modules only; a sync module's entry point is never imported)
 6. **Initialization** — `init()` called (async modules only)
 7. **Startup hooks** — `startup()` called after all modules init (see [Lifecycle](lifecycle.md))
 8. **Shutdown hooks** — `shutdown()` called on process exit (see [Lifecycle](lifecycle.md))
@@ -276,6 +319,61 @@ await waitForModule('rest-server'); // Waits for @stonyx/rest-server
 ```
 
 > **Note:** `waitForModule` is only needed during submodule development or testing. End-user applications don't need it — the CLI ensures all modules are initialized before running your app.
+
+**Failure modes.** `waitForModule` rejects rather than hanging when the loader never
+registered the name, and the two causes are reported as different sentences because
+they send you to different places:
+
+- **Not declared** — there is no `@stonyx/<name>` entry in either dependency map:
+  `Module was not registered in project dependencies`.
+- **Declared but not loaded** — the name *is* in `dependencies` or `devDependencies`,
+  but either the package is not installed under `node_modules` or its `package.json`
+  does not carry the `stonyx-module` keyword. The message says exactly that, and
+  `loadModules` has already emitted a `Warning:` line naming which of the two applies.
+  This is the case `@stonyx/logs` produces, since it ships without the keyword.
+
+Before abofs/stonyx#106 the second case did not reject at all for a name declared in
+`devDependencies` — the promise was registered and never resolved, so the boot hung
+with only a `console.warn`. It now throws in milliseconds. That is a behaviour change:
+a supervisor that previously saw a container which never became ready now sees a named
+crash.
+
+**Circular waits deadlock the boot, and the process then exits 0.** If two async
+modules each `await waitForModule` on the other — or a module waits on its own name,
+which is a one-character copy-paste slip in a module that waits on several siblings —
+neither `init()` ever settles and the `Promise.all` the loader awaits over every
+`init()` never resolves.
+
+**What you observe is not a hang.** `stonyx serve` prints whatever those `init()`s
+logged before they parked, then exits with **status 0** in tens of milliseconds, and
+your entry point is never imported. Measured at `760fc05` against a two-module app
+whose `init()`s await each other across `dependencies` and `devDependencies`: two log
+lines, `EXIT CODE = 0`, 58 ms, and the app's own `app.js` never reached. The mechanism
+is that boot holds no handle — `src/cli.ts` calls `main().catch(...)` with no
+top-level `await`, and `serve` registers its `SIGTERM`/`SIGINT` handlers only *after*
+`await Stonyx.ready` — so once every `init()` is parked on a promise nothing will
+settle, the event loop drains and Node exits cleanly.
+
+Status 0 is the part to plan for, because supervisors read it as success: systemd
+`Restart=on-failure`, a Kubernetes `restartPolicy: OnFailure` and a CI step written
+`stonyx serve && run-smoke-tests` all decline to act on it. The console symptom is a
+service that prints a line or two and exits without an error. This predates
+abofs/stonyx#106 — a `devDependencies`-only pair deadlocked and exited 0 at base
+`5693744` too — but rule 3 widened which manifests can reach it, since cross-map and
+`dependencies`-only pairs used to fail fast instead.
+
+**The loader does not detect the cycle, and that is a scope decision rather than an
+impossibility.** `waitForModule` is told which module is being waited **for** and never
+which module is doing the waiting, so there is no caller attribution to build a cycle
+graph from, and Stonyx sets no boot timeout to hang a fallback off — which is why the
+*cycle* itself is not identifiable here. Detecting the *deadlock*, as opposed to the
+cycle, does not need either of those; it is tracked separately and is out of scope for
+the change that added this section. Read this section as "not detected today", not as
+"undetectable".
+
+Keep the wait graph acyclic. If two modules genuinely need each other, one of them
+should do its part of the work in `startup()` — which runs after every `init()` has
+completed — rather than waiting for its peer inside `init()`.
 
 ## Official Modules
 

@@ -201,8 +201,12 @@ export function generatePackageJson(
     typescript: '^5.8.3'
   };
 
-  // Modules are discovered from devDependencies (see docs/modules.md), and are
-  // requested on the core's own release line rather than at `latest`.
+  // The scaffolder writes modules to `devDependencies` because that remains
+  // the conventional placement for an application — NOT because it is the only
+  // one discovery sees. Since abofs/stonyx#106 rule 3 the loader scans the
+  // de-duplicated union of `dependencies` and `devDependencies`, so either
+  // placement is discovered (see docs/modules.md). Requested on the core's own
+  // release line rather than at `latest`.
   for (const mod of selectedModules) {
     devDependencies[mod.package] = moduleTag;
   }

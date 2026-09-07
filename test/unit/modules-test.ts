@@ -122,6 +122,23 @@ function raceModule(name: string): Promise<string> {
   return Promise.race([ waitForModule(name).then(() => 'resolved'), timeout(250) ]);
 }
 
+/**
+ * As `raceModule`, but reports a rejection as a value instead of propagating it.
+ *
+ * The distinction T23/T13 need is three-way — `'resolved'`, `'TIMEOUT'` (the
+ * hang) and a NAMED rejection (fail-fast) — and `assert.rejects` cannot make
+ * it: against an unresolved deferred promise it never settles, and this suite
+ * sets no `QUnit.config.testTimeout`, so the run would produce no TAP at all
+ * rather than a red test. The race window is what converts the hang into an
+ * observable value.
+ */
+function raceModuleOutcome(name: string): Promise<string> {
+  return Promise.race([
+    waitForModule(name).then(() => 'resolved', (error: unknown) => `rejected: ${(error as Error).message}`),
+    timeout(250),
+  ]);
+}
+
 module('[Unit] loadModules', function(hooks) {
   hooks.afterEach(function() {
     while (roots.length) removeRoot(roots.pop()!);
@@ -141,36 +158,39 @@ module('[Unit] loadModules', function(hooks) {
     assert.strictEqual((config.t1Alpha as Record<string, unknown>).port, 1, 'module defaults merged into config');
   });
 
-  // T2 — GUARD, and the RED baseline abofs/stonyx#106 rule 3 must flip.
-  // Dies under M1 inverted (reading `dependencies` would make this module visible).
+  // T2 — GUARD, FLIPPED by abofs/stonyx#106 rule 3. This is the inversion that
+  // issue's AC1 requires to appear inside #106's own diff.
   //
-  // What this pins: `loadModules` reads `devDependencies` only (modules.ts:55),
-  // so a real, installed stonyx module declared in `dependencies` is invisible
-  // to discovery. That is today's contract. It is not a desirable one.
+  // What it pinned before: `loadModules` read `devDependencies` only — the
+  // `declaredDependencies` initializer, named rather than numbered because a
+  // line number drifts and an identifier does not — so a real, installed
+  // stonyx module declared in `dependencies` was invisible to discovery. That
+  // was the contract, and it was not a desirable one: the published fleet pins
+  // the core through `dependencies`, so the loader could not see its own
+  // siblings.
   //
-  // #106 rule 3 changes it — discovery scans `dependencies` ∪ `devDependencies`.
-  // This test is the RED baseline proving that change actually landed, and #106
-  // MUST invert it inside #106's own diff. Measured across all three plausible
-  // rule-3 shapes, T2 is the SOLE failure in the suite, so there is no rule-3
-  // implementation that leaves it green.
+  // What it pins now: discovery scans the de-duplicated union of `dependencies`
+  // and `devDependencies`, so the SAME fixture that used to yield nothing now
+  // yields exactly one configured, instantiated module. The assertions below
+  // are the inversion of the previous four on an unchanged fixture — the test
+  // was not deleted, skipped, or weakened to `assert.ok(true)`.
   //
-  // Flipping it correctly, in #106, means INVERTING the assertions on this same
-  // fixture — not deleting the test, not skipping it, and not weakening it to
-  // `assert.ok(true)`. Under rule 3 the same root must yield:
-  //     modules.length === 1, modules[0].constructor.name === 'T2Beta'
-  //     Object.keys(config) === [ 'rootPath', 't2Beta' ]  (config block added)
-  //     (config.t2Beta as Record<string, unknown>).port === 2
-  // and the title should drop "flipped by #106". If you are reading this from
-  // inside #106 because this test went red: that red is the intended signal.
-  test('ignores modules declared only in dependencies (today’s contract, flipped by #106)', async function(assert) {
+  // Dies under M1 reverted (`∪` -> `devDependencies` only): `modules` goes back
+  // to empty and `config` back to `[ 'rootPath' ]`. It does NOT die under the
+  // concat-shaped union (T22 owns that) nor under the `?.`-desync shortcut
+  // (T21's invariant line owns that) — this test's fixture is declared in
+  // exactly one map and is async, so it cannot see either hazard.
+  test('discovers modules declared only in dependencies (abofs/stonyx#106 rule 3)', async function(assert) {
     const rootPath = root({ name: 't2-app', dependencies: { '@stonyx/t2-beta': '1.0.0' }});
     installAsyncModule(rootPath, '@stonyx/t2-beta', 'T2Beta', { port: 2 });
 
     const config: StoynxConfig = {};
     const modules = await loadModules(config, rootPath, stubChronicle().asChronicle());
 
-    assert.deepEqual(modules, [], 'a dependencies-only stonyx module is invisible to discovery');
-    assert.deepEqual(Object.keys(config), [ 'rootPath' ], 'no module config block was added');
+    assert.strictEqual(modules.length, 1, 'a dependencies-only stonyx module is discovered');
+    assert.strictEqual(modules[0]!.constructor.name, 'T2Beta', 'the module class was instantiated');
+    assert.deepEqual(Object.keys(config), [ 'rootPath', 't2Beta' ], 'the module config block was added');
+    assert.strictEqual((config.t2Beta as Record<string, unknown>).port, 2, 'module defaults merged into config');
   });
 
   // T3 — GUARD, on the exact line abofs/stonyx#106 rewrites (modules.ts:61-63).
@@ -483,8 +503,9 @@ module('[Unit] loadModules', function(hooks) {
   // module loads and `waitForModule` on it throws "was not registered"
   // forever, with the suite fully green. The line above splits them: still
   // 99/0 under a correct rule 3, but 98/1 with this test the SOLE failure
-  // under the desync, rejecting with "Could wait for module:
-  // @stonyx/t21-sync. Module was not registered in project dependencies".
+  // under the desync, rejecting by name from `waitForModule` (today that is
+  // its declared-but-not-loaded branch, since `t21-sync` IS declared; the
+  // wording is quoted nowhere here because it drifts and the branch does not).
   //
   // And if this test reds at `:97` inside #106, adding `?.` there is NOT the
   // fix. `modules.ts:43` already carries that exact optional chain three lines
@@ -493,10 +514,8 @@ module('[Unit] loadModules', function(hooks) {
   // resolves never. The fix is to make the registration loop at `:66` consume
   // the same list as `:61`.
   //
-  // The invariant line cannot be added HERE. Measured at this head with no
-  // rule 3, it reds this test (98/1, sole failure): `t21-sync` is legitimately
-  // never registered today. It only becomes meaningful once rule 3 lands,
-  // which is why this is a note and not an assertion.
+  // Rule 3 has now landed, so the invariant line below is live. It is the
+  // ONLY change #106 makes to this test.
   test('does not throw for a sync stonyx-module declared only in dependencies (forward guard for #106)', async function(assert) {
     const rootPath = root({ name: 't21-app', dependencies: { '@stonyx/t21-sync': '1.0.0' }});
     installModule(rootPath, '@stonyx/t21-sync', { keywords: [ 'stonyx-module' ], main: 'main.js' }, {
@@ -515,6 +534,17 @@ module('[Unit] loadModules', function(hooks) {
       loadError,
       undefined,
       `loadModules resolved without a TypeError at modules.ts:97, got: ${String(loadError)}`
+    );
+
+    // abofs/stonyx#106 AC2 — the INVARIANT, not the symptom. "Does not throw"
+    // survives the `?.`-at-the-sync-resolve shortcut; "every discovered module
+    // is pre-registered" does not. Under that shortcut this rejects from
+    // `waitForModule` naming `@stonyx/t21-sync` while the aggregate count is
+    // otherwise identical.
+    assert.strictEqual(
+      await raceModule('t21-sync'),
+      'resolved',
+      'every discovered module is pre-registered, so waitForModule resolves'
     );
   });
 
@@ -574,13 +604,40 @@ module('[Unit] loadModules', function(hooks) {
     assert.deepEqual(config.t12Gamma, { port: 9999, logColor: 'cyan', extra: true }, 'user config takes precedence');
   });
 
-  // T13 — HAZARD GUARD, not a defect test. It pins F1: the two `continue`
-  // paths in loadModules leave `modulePromises[name]` permanently unresolved,
-  // so `waitForModule` hangs forever with only a stderr warning. This is a
-  // known hazard filed separately; the guard exists so a fix is a deliberate,
-  // visible change rather than a silent one.
-  // Dies under: resolve the promise before the `continue` at modules.ts:93.
-  test('hazard guard (F1): a keyword-rejected module leaves waitForModule hanging forever', async function(assert) {
+  // T13 — WAS a hazard guard pinning F1; FLIPPED by PR #120 fix round 1.
+  //
+  // It used to pin the fact that the two `continue` paths in `loadModules`
+  // leave `modulePromises[name]` permanently unresolved, so `waitForModule`
+  // hangs forever with only a stderr warning. Its own note said the guard
+  // existed "so a fix is a deliberate, visible change rather than a silent
+  // one". This is that deliberate, visible change, and the flip is the record
+  // of it.
+  //
+  // Scoping pre-registration to the DISCOVERED set (modules.ts) removes the
+  // hang on both halves of the input domain, and they are not the same kind of
+  // change:
+  //   - `dependencies`-declared names — the hang was INTRODUCED by #106 rule 3
+  //     (at base such a name was never registered, so `waitForModule` threw in
+  //     milliseconds). T23 covers that half.
+  //   - `devDependencies`-declared names — this fixture. The hang is
+  //     INHERITED; it behaved identically at base `5693744`. Going from
+  //     "hangs forever" to "throws, named, immediately" is a behaviour change
+  //     this PR makes beyond the defect it introduced, and it is deliberate:
+  //     a caller awaiting a module the loader refused to load has no correct
+  //     outcome, and the named throw is the diagnosable one.
+  //
+  // The EXPECTED MESSAGE is the declared-but-not-loaded branch of
+  // `waitForModule`, not the inherited one. `t13-nokey` is in this fixture's
+  // `devDependencies`, so the inherited sentence — "Module was not registered
+  // in project dependencies" — would be false about this very fixture. Round 1
+  // pinned that false sentence here verbatim; this is the correction, and it is
+  // why the assertion is on the exact text rather than on a substring.
+  //
+  // Dies under: restoring pre-registration over the full `moduleDependencies`
+  // list (reads `TIMEOUT`), resolving the promise before the `continue` (reads
+  // `resolved` — the silently-wrong shape, see T23), or collapsing
+  // `waitForModule` back to one sentence (reads the inherited message).
+  test('a keyword-rejected module is not registered, so waitForModule fails fast instead of hanging', async function(assert) {
     const rootPath = root({
       name: 't13-app',
       devDependencies: { '@stonyx/t13-alpha': '1.0.0', '@stonyx/t13-nokey': '1.0.0' },
@@ -606,10 +663,257 @@ module('[Unit] loadModules', function(hooks) {
       'premise: a loaded module resolves well inside the race window'
     );
 
+    // And premise second: the `continue` this test is ABOUT was actually taken.
+    // Without this the expected rejection is also the default state of a name
+    // the loader never saw, so deleting `@stonyx/t13-nokey` from the fixture's
+    // `devDependencies` — leaving the package on disk — left this test green.
+    // Measured before this assertion existed. The warning is the loader's own
+    // record of reaching the keyword branch, and this test already captured it
+    // and threw it away.
+    assert.deepEqual(
+      capture.warnings,
+      [ 'Warning: Stonyx modules must contain the "stonyx-module" keyword. Module was not loaded' ],
+      'premise: discovery really did reach the missing-keyword continue for this fixture'
+    );
+
     assert.strictEqual(
-      await raceModule('t13-nokey'),
-      'TIMEOUT',
-      'the keyword-rejected module never resolves (F1, pinned as-is)'
+      await raceModuleOutcome('t13-nokey'),
+      'rejected: Could wait for module: @stonyx/t13-nokey. It IS declared in this project\'s ' +
+      'dependencies or devDependencies, but the loader did not load it: either it is not ' +
+      'installed under node_modules, or its package.json does not carry the "stonyx-module" ' +
+      'keyword. loadModules warned which one at load time.',
+      'the keyword-rejected module is not registered at all, so waitForModule throws — and names the ' +
+      'real cause, because the name IS in the manifest'
+    );
+  });
+
+  // T23 — REGRESSION GUARD for the boot hang INTRODUCED by #106 rule 3
+  // (PR #120, fix round 1). Red at `a57045e`, green after the fix.
+  //
+  // Rule 3 widened the discovery source, and the pre-registration loop
+  // consumed the widened list directly — so every `@stonyx/*` name in
+  // `dependencies` got a deferred promise, including names discovery then
+  // `continue`s past without ever resolving. There are THREE resolve sites in
+  // `src/modules.ts` — the no-`init()` early return, the `init()` wrapper, and
+  // the sync-module `continue` in the load loop — and none of them is reachable
+  // from a DISCOVERY `continue`. (This sentence said "exactly two" in the
+  // commit that added the third.)
+  //
+  // Reproduced end to end before the fix, driving the real `loadModules`
+  // against a root with `@stonyx/orm` in `dependencies` but absent from
+  // `node_modules` (stale CI cache / partial restore) plus an installed module
+  // whose `init()` awaits it:
+  //     base 5693744  THREW "Could wait for module: @stonyx/orm. Module was
+  //                   not registered in project dependencies" in 3 ms
+  //     head a57045e  one console.warn, then loadModules NEVER SETTLED
+  // A hang at boot is strictly worse than the throw it replaced: no exit code,
+  // no crash reason, so a supervisor sees a container that never becomes
+  // ready rather than one that failed.
+  //
+  // Both discovery `continue` paths are covered, because they are separate
+  // sites: the missing-manifest path and the missing-keyword path. The second
+  // is not hypothetical — `@stonyx/logs` ships WITHOUT the `stonyx-module`
+  // keyword and is a natural `dependencies` entry for any app that constructs
+  // a Chronicle directly.
+  //
+  // The assertion is on the NAMED rejection, not merely on "not TIMEOUT".
+  // Resolving the promise in each `continue` branch also removes the hang and
+  // would satisfy a weaker assertion — while making `waitForModule` report
+  // success for a module that was never loaded. That is worse than the hang
+  // and silent, so this test must be able to tell the two remedies apart.
+  test('a dependencies-declared name that fails discovery is never registered (regression: #120 boot hang)', async function(assert) {
+    const rootPath = root({
+      name: 't23-app',
+      dependencies: {
+        '@stonyx/t23-absent': '1.0.0',
+        '@stonyx/t23-nokey': '1.0.0',
+        '@stonyx/t23-real': '1.0.0',
+      },
+    });
+
+    // `@stonyx/t23-absent` is deliberately NOT installed.
+    installAsyncModule(rootPath, '@stonyx/t23-real', 'T23Real');
+    installModule(rootPath, '@stonyx/t23-nokey', { keywords: [ 'log', 'logging' ], main: 'main.js' }, {
+      'main.js': moduleSource('T23Nokey'),
+    });
+
+    const capture = captureConsole();
+
+    try {
+      await loadModules({}, rootPath, stubChronicle().asChronicle());
+    } finally {
+      capture.restore();
+    }
+
+    // Premise first: rule 3 still holds. A real module declared in
+    // `dependencies` is discovered, registered and resolved — the fix narrows
+    // registration, it does not narrow discovery back to `devDependencies`.
+    assert.strictEqual(
+      await raceModule('t23-real'),
+      'resolved',
+      'premise: a dependencies-declared module is still discovered and still resolves'
+    );
+
+    // And that BOTH `continue`s were actually taken. The expected rejections
+    // below are also the default state of a name the loader never saw, so
+    // deleting either name from the fixture's `dependencies` — leaving the
+    // package on disk — left this test green. Measured before this assertion
+    // existed. These two warnings are the loader's own record of reaching each
+    // branch, in discovery order, and this test already captured them.
+    assert.deepEqual(
+      capture.warnings,
+      [
+        'Warning: Could not locate stonyx module: "@stonyx/t23-absent". Module was not loaded',
+        'Warning: Stonyx modules must contain the "stonyx-module" keyword. Module was not loaded',
+      ],
+      'premise: discovery reached the missing-manifest continue and then the missing-keyword one'
+    );
+
+    assert.strictEqual(
+      await raceModuleOutcome('t23-absent'),
+      'rejected: Could wait for module: @stonyx/t23-absent. It IS declared in this project\'s ' +
+      'dependencies or devDependencies, but the loader did not load it: either it is not ' +
+      'installed under node_modules, or its package.json does not carry the "stonyx-module" ' +
+      'keyword. loadModules warned which one at load time.',
+      'the missing-manifest continue path leaves no dangling promise, and the throw does not deny the ' +
+      'declaration it can see'
+    );
+    assert.strictEqual(
+      await raceModuleOutcome('t23-nokey'),
+      'rejected: Could wait for module: @stonyx/t23-nokey. It IS declared in this project\'s ' +
+      'dependencies or devDependencies, but the loader did not load it: either it is not ' +
+      'installed under node_modules, or its package.json does not carry the "stonyx-module" ' +
+      'keyword. loadModules warned which one at load time.',
+      'nor does the missing-keyword continue path, and it too reports declared-but-not-loaded'
+    );
+  });
+
+  // T24 — REGRESSION GUARD for the third leak named alongside the two above:
+  // `initializeModule` returns early for a module class with no `init()`, so
+  // the resolve one line below it never runs and the promise dangles.
+  //
+  // Scoping pre-registration to `discovered` does NOT close this one — such a
+  // module IS discovered — and the gap was measured, not assumed: with the
+  // registration fix applied and this arm unfixed, the same driver still read
+  // "loadModules never settled". The module is loaded, instantiated and has
+  // nothing to initialise, so resolving is the truthful report. This is the
+  // one place resolving on behalf of a module is honest, and it is exactly
+  // the opposite of resolving on a `continue` path (see T23).
+  //
+  // Dies under: dropping the resolve from the no-`init()` early return.
+  test('a discovered async module whose class has no init() resolves rather than dangling', async function(assert) {
+    const rootPath = root({ name: 't24-app', dependencies: { '@stonyx/t24-noinit': '1.0.0' }});
+    installModule(rootPath, '@stonyx/t24-noinit', { keywords: [ 'stonyx-module', 'stonyx-async' ], main: 'main.js' }, {
+      'main.js': 'export default class T24NoInit {}\n',
+      'config/environment.js': environmentSource({}),
+    });
+
+    const modules = await loadModules({}, rootPath, stubChronicle().asChronicle());
+
+    assert.strictEqual(modules.length, 1, 'premise: the module really was discovered and instantiated');
+    assert.strictEqual(modules[0]!.constructor.name, 'T24NoInit', 'and it is the module class');
+    assert.strictEqual(
+      await raceModule('t24-noinit'),
+      'resolved',
+      'a loaded module with nothing to initialise is ready, not pending forever'
+    );
+  });
+
+  // T25 — PINS THE OPTIONAL CHAIN in `initializeModule`'s no-`init()` early
+  // return. That chain shipped in fix round 1 with zero coverage: replacing
+  // `?.` with `!` left the suite at 181 pass / 0 fail at f575a3c, so the suite
+  // could not tell whether the guard was there.
+  //
+  // It is load-bearing, on the STANDALONE path. `initializeModule` is reached
+  // there as `initializeModule(projectName, …)`, and `projectName` — the root
+  // package's own name — is never a key in `modulePromises`, which holds only
+  // `@stonyx/`-prefixed declared names. T10 covers the standalone path, but its
+  // fixture comes from `moduleSource()`, which always ships an `init()`, so
+  // T10 never reaches the early return. Measured directly against this fixture
+  // with the `?.` removed: loadModules THREW "Cannot read properties of
+  // undefined (reading 'resolve')" — and `stonyx new` can produce this shape.
+  //
+  // Dies under: `modulePromises[moduleName]?.resolve()` -> `!.resolve()` in the
+  // no-`init()` early return.
+  test('a standalone root whose class has no init() loads without touching an unregistered promise', async function(assert) {
+    const rootPath = root({ name: 'stonyx-t25-standalone', keywords: [ 'stonyx-module' ], main: 'main.js' });
+    writeRootFile(rootPath, 'main.js', 'export default class T25Standalone {}\n');
+
+    const modules = await loadModules({}, rootPath, stubChronicle().asChronicle());
+
+    assert.strictEqual(modules.length, 1, 'the standalone root was loaded rather than throwing');
+    assert.strictEqual(modules[0]!.constructor.name, 'T25Standalone', 'and instantiated, despite having no init()');
+  });
+
+  // T26 — THE SUPERSET DIRECTION of `declaredModuleNames`, which was the one
+  // uncovered direction and is the one that prints the declared-but-not-loaded
+  // sentence.
+  //
+  // The subset direction was already caught: seeding
+  // `new Set(moduleDependencies.slice(1))` reads 182/1 at c87826b with T23 the
+  // sole failure. The other way round was a SURVIVOR — seeding
+  // `new Set([ ...moduleDependencies, '@stonyx/ghost' ])` read 183 pass / 0
+  // fail at c87826b, because every name the suite asserted the set through was
+  // also a name in `moduleDependencies`. Nothing constrained the set from
+  // holding a name the app never declared, and that is the branch that tells
+  // the operator "It IS declared in this project's dependencies or
+  // devDependencies" — i.e. abofs/stonyx#108's names-the-wrong-cause defect,
+  // pointed the other way.
+  //
+  // THE FIXTURE IS THE POINT. `@stonyx/t26-undeclared` is installed under
+  // `node_modules` with both keywords and a valid config — everything except a
+  // manifest entry. Discovery is driven by the MANIFEST, not by the
+  // filesystem, so it is never scanned, never registered, and `waitForModule`
+  // must reach the NOT-DECLARED sentence. That kills any superset built from
+  // the wrong source: the installed set, the discovered set, a `readdir` of
+  // `node_modules`, or the union of this load with a previous one.
+  //
+  // WHAT IT CANNOT KILL, stated rather than implied: a superset seeded with an
+  // arbitrary literal that this fixture does not name. No finite test closes
+  // that, and no realistic regression produces it — a wrong SOURCE for the set
+  // is the shape that ships, and the source is what this pins.
+  //
+  // Dies under: any `declaredModuleNames` assignment that admits a name absent
+  // from the app's `dependencies` ∪ `devDependencies`.
+  test('a name installed but declared in NEITHER map is reported as not declared, not as declared-but-not-loaded', async function(assert) {
+    const rootPath = root({
+      name: 't26-app',
+      dependencies: { '@stonyx/t26-real': '1.0.0' },
+    });
+
+    installAsyncModule(rootPath, '@stonyx/t26-real', 'T26Real');
+    // Installed and perfectly loadable — and declared nowhere.
+    installAsyncModule(rootPath, '@stonyx/t26-undeclared', 'T26Undeclared');
+
+    const capture = captureConsole();
+    let modules;
+
+    try {
+      modules = await loadModules({}, rootPath, stubChronicle().asChronicle());
+    } finally {
+      capture.restore();
+    }
+
+    assert.strictEqual(
+      await raceModule('t26-real'),
+      'resolved',
+      'premise: the declared module IS discovered, so the loader ran normally over this fixture'
+    );
+    assert.deepEqual(capture.warnings, [], 'premise: and nothing was skipped — the undeclared package was never even looked at');
+    assert.strictEqual(modules.length, 1, 'the undeclared package is not loaded: discovery reads the manifest, not node_modules');
+
+    assert.strictEqual(
+      await raceModuleOutcome('t26-undeclared'),
+      'rejected: Could wait for module: @stonyx/t26-undeclared. Module was not registered in ' +
+      'project dependencies',
+      'so waitForModule takes the NOT-DECLARED branch for it'
+    );
+
+    const outcome = await raceModuleOutcome('t26-undeclared');
+
+    assert.notOk(
+      outcome.includes('It IS declared'),
+      `and must not claim the manifest contains it, got: ${outcome}`
     );
   });
 

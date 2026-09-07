@@ -217,9 +217,10 @@ and the module. Both of those behaviours are gone; the message no longer exists.
 modules it starts from are the `@stonyx/*` packages in the application's `dependencies`
 or `devDependencies` that carry the `stonyx-module` keyword, and it compares physical
 package roots rather than version ranges. From each of those modules it follows Node's
-ESM resolution walk and reports the copy that module would import, whoever owns it —
-including `<app>/node_modules/stonyx`, which no module declares. A copy on none of
-those walks is not counted. And it fails **open** — an unreadable or unparseable
+ESM resolution walk and reports the FIRST copy that walk finds — the one that module
+would import — whoever owns it, including `<app>/node_modules/stonyx`, which no module
+declares. A copy no module's walk reaches first is not counted, and one further up a
+walk is hidden by a nearer one. And it fails **open** — an unreadable or unparseable
 manifest, or a running core that cannot identify itself, produces a `console.warn`
 naming the probe and no refusal.
 
@@ -335,13 +336,13 @@ crash.
 **Circular waits deadlock the boot, and nothing detects the cycle.** If two async
 modules each `await waitForModule` on the other — or a module waits on its own name,
 which is a one-character copy-paste slip in a module that waits on several siblings —
-neither `init()` ever settles, the `Promise.all` in step 6 never resolves, and
-`loadModules` hangs with no error, no timeout and no exit code. The loader cannot
-detect it: `waitForModule` is told which module is being waited **for** and never which
-module is doing the waiting, and Stonyx sets no boot timeout. Keep the wait graph
-acyclic. If two modules genuinely need each other, one of them should do its part of
-the work in `startup()` — which runs after every `init()` has completed — rather than
-waiting for its peer inside `init()`.
+neither `init()` ever settles, the `Promise.all` the loader awaits over every `init()`
+never resolves, and `loadModules` hangs with no error, no timeout and no exit code.
+The loader cannot detect it: `waitForModule` is told which module is being waited
+**for** and never which module is doing the waiting, and Stonyx sets no boot timeout.
+Keep the wait graph acyclic. If two modules genuinely need each other, one of them
+should do its part of the work in `startup()` — which runs after every `init()` has
+completed — rather than waiting for its peer inside `init()`.
 
 ## Official Modules
 

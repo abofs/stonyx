@@ -463,14 +463,22 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
     // names what is ENUMERATED — the resolution walk — instead of closing a set
     // of packages, because the enumeration is a property the code has and the
     // set is not. D20 pins it against a fixture that counts such a copy.
+    //
+    // "FIRST copy that walk finds" is not padding, and it is the round-2
+    // rewrite's own near-miss: `coreSeenBy` returns on the first `asCore` hit,
+    // so a second copy further up the same walk is SHADOWED and never counted.
+    // Written as "a copy owned by any package on that walk is counted" this
+    // sentence would have been false in the same shape as the one it replaces —
+    // over-closing in the other direction. The shadowing case is stated because
+    // it is the reason the fail-open note below matters.
     'Scope of this check: it compares physical package ROOTS only. It does not check that the ' +
     'single surviving copy is a compatible version, and the modules it starts from are the ' +
     '@stonyx/* packages declared in this app\'s dependencies or devDependencies that carry the ' +
     '"stonyx-module" keyword — nothing else. Either placement counts: the loader scans the ' +
     'de-duplicated union of both maps. What it then reports is not those packages\' own copies but ' +
     'the copy each of them would IMPORT: for every one it follows Node\'s ESM resolution walk up ' +
-    'from that module\'s own directory, so a copy owned by any package on that walk is counted — ' +
-    'including this app\'s own node_modules/stonyx, which no module declares. A copy on none of ' +
-    'those walks is not counted.',
+    'from that module\'s own directory and takes the FIRST copy that walk finds, whoever owns it — ' +
+    'including this app\'s own node_modules/stonyx, which no module declares. A copy no module\'s ' +
+    'walk reaches first is not counted, and one further up a walk is hidden by a nearer one.',
   ].join('\n');
 }

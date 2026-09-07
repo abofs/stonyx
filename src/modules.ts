@@ -145,10 +145,17 @@ export default async function loadModules(
   //
   // Rule 3 widens the source to the DE-DUPLICATED union of both maps. Object
   // spread IS the de-duplication and is load-bearing: a module declared in both
-  // maps collapses to one key, so it is registered once and instantiated once.
-  // A bare `[ ...Object.keys(deps), ...Object.keys(devDeps) ]` concat produces a
-  // byte-identical suite aggregate while instantiating such a module twice and
-  // running its `init()` twice — T22's instance-count assertion owns that kill.
+  // maps collapses to one key, so it is registered once and — for an async
+  // module — instantiated once. (A SYNC module is discovered once and
+  // instantiated zero times; the loader never imports its entry point. Measured
+  // on a dual-declared sync fixture: `modules.length === 0`.)
+  //
+  // A bare `[ ...Object.keys(deps), ...Object.keys(devDeps) ]` concat instantiates
+  // a dual-declared module twice and runs its `init()` twice. That WOULD be
+  // invisible to the suite aggregate were T22 not armed; T22's instance-count
+  // assertion is what makes it visible. Measured at this head with the concat
+  // seeded: 178/1 with T22 the sole failure, both of its counts reading actual 2
+  // against expected 1.
   const declaredDependencies = {
     ...(rootPackage.dependencies || {}),
     ...(rootPackage.devDependencies || {}),
@@ -170,7 +177,7 @@ export default async function loadModules(
   // DISCOVERY, hoisted above the pre-flight.
   //
   // The pre-flight must check exactly what the loader loads, and no more.
-  // `@stonyx/*` is a NAME test, not a membership test: a scoped devDependency
+  // `@stonyx/*` is a NAME test, not a membership test: a scoped dependency
   // without the `stonyx-module` keyword is warned about and skipped below —
   // never imported, never configured, incapable of registering anything on any
   // singleton — and refusing to boot over its nested copy prescribed the MODULE

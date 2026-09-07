@@ -12,8 +12,22 @@ project, match it.
 - **`@stonyx/*` modules go in either `dependencies` or `devDependencies`.** The
   loader scans the de-duplicated union of both maps (abofs/stonyx#106), so either
   placement is discovered, and declaring a module in both loads it exactly once.
-  `devDependencies` remains the conventional choice for an application
-  (see [How Modules Are Discovered](#how-modules-are-discovered)).
+  `devDependencies` remains the conventional choice for an application.
+- **Upgrading to abofs/stonyx#106 can refuse an application that booted before.**
+  A module declared only in `dependencies` was previously never discovered, so it was
+  never loaded, never configured, and — the part that breaks — never put through the
+  duplicate-core pre-flight. It is now. An application that booted yesterday with such
+  a module silently ignored can be refused today by that check, purely by upgrading the
+  core; the five modules listed in
+  [Framework Modules](conventions/framework-modules.md#a-module-never-declares-stonyx-in-dependencies)
+  carry exactly the non-compliant pin that triggers it. The refusal is correct — the
+  module was already broken, just quietly — and the fix is the one the message prints:
+  the module must be republished with `stonyx` in `devDependencies` plus a peer range,
+  and meanwhile the app can pin the core so every copy dedupes to one. To confirm this
+  is what you are seeing, check the `seen by "…"` rows in the refusal against your
+  `dependencies`, not only your `devDependencies`. See
+  [Version alignment](#version-alignment) and
+  [How Modules Are Discovered](#how-modules-are-discovered).
 - **Pin the core to an exact version**, and request every module from the core's own
   release line. Never `latest` for the core — see [Why not `latest`](#why-not-latest).
 
@@ -192,12 +206,11 @@ configurations. Module "<name>" failed to load.` — a message wrong about both 
 and the module. Both of those behaviours are gone; the message no longer exists.
 
 **Two limits of the pre-flight, so absence of a refusal is still not proof.** It only
-looks at `@stonyx/*` packages in the application's `dependencies` or
-`devDependencies` that carry the `stonyx-module` keyword, and it compares physical
-package roots rather than version ranges. A copy dragged in by anything else is not
-counted, and it fails **open** —
-an unreadable or unparseable manifest, or a running core that cannot identify itself,
-produces a `console.warn` naming the probe and no refusal.
+looks at `@stonyx/*` packages in the application's `dependencies` or `devDependencies`
+that carry the `stonyx-module` keyword, and it compares physical package roots rather
+than version ranges. A copy dragged in by anything else is not counted, and it fails
+**open** — an unreadable or unparseable manifest, or a running core that cannot
+identify itself, produces a `console.warn` naming the probe and no refusal.
 
 Absence of an error is not evidence of a single core. Count.
 
@@ -220,7 +233,7 @@ Absence of an error is not evidence of a single core. Count.
 
 Stonyx scans the de-duplicated union of your project's `dependencies` and `devDependencies` for packages prefixed with `@stonyx/`. Each matching package must include the `stonyx-module` keyword in its `package.json` to be loaded.
 
-The `@stonyx/` prefix is a **name** test that bounds the scan; the `stonyx-module` keyword is what decides whether a scanned package is actually a module. A package declared in both maps is discovered once, instantiated once, and has its `init()` run once.
+The `@stonyx/` prefix is a **name** test that bounds the scan; the `stonyx-module` keyword is what decides whether a scanned package is actually a module. A package declared in both maps is discovered once — and for an async module, instantiated once with its `init()` run once. A **sync** module is discovered but never instantiated at all (see [Sync Modules](#sync-modules)), so "once" there means one discovery and zero instantiations.
 
 ```json
 {
@@ -234,7 +247,7 @@ The `@stonyx/` prefix is a **name** test that bounds the scan; the `stonyx-modul
 
 ### Sync Modules
 
-Modules with only the `stonyx-module` keyword are treated as synchronous. They are instantiated but their promise resolves immediately — no init phase is awaited.
+Modules with only the `stonyx-module` keyword are treated as synchronous. The loader resolves their `waitForModule` promise immediately and moves on: it does **not** import the module's entry point, does not construct the class, and does not call `init()`. Measured on a dual-declared sync module, `loadModules` returns `modules.length === 0` and the entry point's top-level code never runs. A sync module is therefore a declaration that something is present and ready, not code the loader executes — the duplicate-core pre-flight still covers it, because a second core in its subtree would never announce itself.
 
 ### Async Modules
 
@@ -266,7 +279,7 @@ All module `init()` calls run concurrently via `Promise.all`.
 2. **Validation** — verify `stonyx-module` keyword exists
 3. **Config merge** — async module defaults merged with user config
 4. **Log setup** — module-specific Chronicle log created if `logColor` is set
-5. **Instantiation** — module class is `new`'d
+5. **Instantiation** — module class is `new`'d (async modules only; a sync module's entry point is never imported)
 6. **Initialization** — `init()` called (async modules only)
 7. **Startup hooks** — `startup()` called after all modules init (see [Lifecycle](lifecycle.md))
 8. **Shutdown hooks** — `shutdown()` called on process exit (see [Lifecycle](lifecycle.md))

@@ -161,11 +161,13 @@ module('[Unit] loadModules', function(hooks) {
   // T2 — GUARD, FLIPPED by abofs/stonyx#106 rule 3. This is the inversion that
   // issue's AC1 requires to appear inside #106's own diff.
   //
-  // What it pinned before: `loadModules` read `devDependencies` only
-  // (modules.ts:55), so a real, installed stonyx module declared in
-  // `dependencies` was invisible to discovery. That was the contract, and it
-  // was not a desirable one — the published fleet pins the core through
-  // `dependencies`, so the loader could not see its own siblings.
+  // What it pinned before: `loadModules` read `devDependencies` only — the
+  // `declaredDependencies` initializer, named rather than numbered because a
+  // line number drifts and an identifier does not — so a real, installed
+  // stonyx module declared in `dependencies` was invisible to discovery. That
+  // was the contract, and it was not a desirable one: the published fleet pins
+  // the core through `dependencies`, so the loader could not see its own
+  // siblings.
   //
   // What it pins now: discovery scans the de-duplicated union of `dependencies`
   // and `devDependencies`, so the SAME fixture that used to yield nothing now

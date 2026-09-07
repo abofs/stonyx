@@ -27,7 +27,7 @@ stonyx test     # Bootstrap + run tests
 stonyx help     # Show all available commands
 ```
 
-Stonyx reads `config/environment.ts` (preferred) or `config/environment.js`, initializes all `@stonyx/*` modules declared in your `dependencies` or `devDependencies`, and runs your application.
+Stonyx reads `config/environment.ts` (preferred) or `config/environment.js`, loads the `@stonyx/*` modules declared in your `dependencies` or `devDependencies` (initializing the async ones), and runs your application.
 
 ## Documentation
 

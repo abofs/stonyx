@@ -21,12 +21,17 @@ project, match it.
   core; the five modules listed in
   [Framework Modules](conventions/framework-modules.md#a-module-never-declares-stonyx-in-dependencies)
   carry exactly the non-compliant pin that triggers it. The refusal is correct — the
-  module was already broken, just quietly — and the fix is the one the message prints:
-  the module must be republished with `stonyx` in `devDependencies` plus a peer range,
-  and meanwhile the app can pin the core so every copy dedupes to one. To confirm this
-  is what you are seeing, check the `seen by "…"` rows in the refusal against your
-  `dependencies`, not only your `devDependencies`. See
-  [Version alignment](#version-alignment) and
+  module was already broken, just quietly. **Do what the message prints, not what this
+  paragraph paraphrases:** the module-author half is unconditional — republish with
+  `stonyx` in `devDependencies` plus a peer range — but the app-side half has three
+  branches and two of them say no pin works. If the modules disagree among themselves
+  the message says *"There is no consumer-side pin that fixes this"*; if every copy is
+  already at the running core's version it says *"no pin can merge them"* and tells you
+  to run one core, from this app's own `node_modules/.bin/stonyx` rather than a global
+  install. Only the third branch offers `pin stonyx@<version>`, and that is the branch
+  the upgrade scenario above usually lands in. To confirm this is what you are seeing,
+  check the `seen by "…"` rows in the refusal against your `dependencies`, not only
+  your `devDependencies`. See [Version alignment](#version-alignment) and
   [How Modules Are Discovered](#how-modules-are-discovered).
 - **Pin the core to an exact version**, and request every module from the core's own
   release line. Never `latest` for the core — see [Why not `latest`](#why-not-latest).

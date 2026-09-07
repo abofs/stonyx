@@ -141,36 +141,37 @@ module('[Unit] loadModules', function(hooks) {
     assert.strictEqual((config.t1Alpha as Record<string, unknown>).port, 1, 'module defaults merged into config');
   });
 
-  // T2 — GUARD, and the RED baseline abofs/stonyx#106 rule 3 must flip.
-  // Dies under M1 inverted (reading `dependencies` would make this module visible).
+  // T2 — GUARD, FLIPPED by abofs/stonyx#106 rule 3. This is the inversion that
+  // issue's AC1 requires to appear inside #106's own diff.
   //
-  // What this pins: `loadModules` reads `devDependencies` only (modules.ts:55),
-  // so a real, installed stonyx module declared in `dependencies` is invisible
-  // to discovery. That is today's contract. It is not a desirable one.
+  // What it pinned before: `loadModules` read `devDependencies` only
+  // (modules.ts:55), so a real, installed stonyx module declared in
+  // `dependencies` was invisible to discovery. That was the contract, and it
+  // was not a desirable one — the published fleet pins the core through
+  // `dependencies`, so the loader could not see its own siblings.
   //
-  // #106 rule 3 changes it — discovery scans `dependencies` ∪ `devDependencies`.
-  // This test is the RED baseline proving that change actually landed, and #106
-  // MUST invert it inside #106's own diff. Measured across all three plausible
-  // rule-3 shapes, T2 is the SOLE failure in the suite, so there is no rule-3
-  // implementation that leaves it green.
+  // What it pins now: discovery scans the de-duplicated union of `dependencies`
+  // and `devDependencies`, so the SAME fixture that used to yield nothing now
+  // yields exactly one configured, instantiated module. The assertions below
+  // are the inversion of the previous four on an unchanged fixture — the test
+  // was not deleted, skipped, or weakened to `assert.ok(true)`.
   //
-  // Flipping it correctly, in #106, means INVERTING the assertions on this same
-  // fixture — not deleting the test, not skipping it, and not weakening it to
-  // `assert.ok(true)`. Under rule 3 the same root must yield:
-  //     modules.length === 1, modules[0].constructor.name === 'T2Beta'
-  //     Object.keys(config) === [ 'rootPath', 't2Beta' ]  (config block added)
-  //     (config.t2Beta as Record<string, unknown>).port === 2
-  // and the title should drop "flipped by #106". If you are reading this from
-  // inside #106 because this test went red: that red is the intended signal.
-  test('ignores modules declared only in dependencies (today’s contract, flipped by #106)', async function(assert) {
+  // Dies under M1 reverted (`∪` -> `devDependencies` only): `modules` goes back
+  // to empty and `config` back to `[ 'rootPath' ]`. It does NOT die under the
+  // concat-shaped union (T22 owns that) nor under the `?.`-desync shortcut
+  // (T21's invariant line owns that) — this test's fixture is declared in
+  // exactly one map and is async, so it cannot see either hazard.
+  test('discovers modules declared only in dependencies (abofs/stonyx#106 rule 3)', async function(assert) {
     const rootPath = root({ name: 't2-app', dependencies: { '@stonyx/t2-beta': '1.0.0' }});
     installAsyncModule(rootPath, '@stonyx/t2-beta', 'T2Beta', { port: 2 });
 
     const config: StoynxConfig = {};
     const modules = await loadModules(config, rootPath, stubChronicle().asChronicle());
 
-    assert.deepEqual(modules, [], 'a dependencies-only stonyx module is invisible to discovery');
-    assert.deepEqual(Object.keys(config), [ 'rootPath' ], 'no module config block was added');
+    assert.strictEqual(modules.length, 1, 'a dependencies-only stonyx module is discovered');
+    assert.strictEqual(modules[0]!.constructor.name, 'T2Beta', 'the module class was instantiated');
+    assert.deepEqual(Object.keys(config), [ 'rootPath', 't2Beta' ], 'the module config block was added');
+    assert.strictEqual((config.t2Beta as Record<string, unknown>).port, 2, 'module defaults merged into config');
   });
 
   // T3 — GUARD, on the exact line abofs/stonyx#106 rewrites (modules.ts:61-63).
@@ -493,10 +494,8 @@ module('[Unit] loadModules', function(hooks) {
   // resolves never. The fix is to make the registration loop at `:66` consume
   // the same list as `:61`.
   //
-  // The invariant line cannot be added HERE. Measured at this head with no
-  // rule 3, it reds this test (98/1, sole failure): `t21-sync` is legitimately
-  // never registered today. It only becomes meaningful once rule 3 lands,
-  // which is why this is a note and not an assertion.
+  // Rule 3 has now landed, so the invariant line below is live. It is the
+  // ONLY change #106 makes to this test.
   test('does not throw for a sync stonyx-module declared only in dependencies (forward guard for #106)', async function(assert) {
     const rootPath = root({ name: 't21-app', dependencies: { '@stonyx/t21-sync': '1.0.0' }});
     installModule(rootPath, '@stonyx/t21-sync', { keywords: [ 'stonyx-module' ], main: 'main.js' }, {
@@ -515,6 +514,17 @@ module('[Unit] loadModules', function(hooks) {
       loadError,
       undefined,
       `loadModules resolved without a TypeError at modules.ts:97, got: ${String(loadError)}`
+    );
+
+    // abofs/stonyx#106 AC2 — the INVARIANT, not the symptom. "Does not throw"
+    // survives the `?.`-at-the-sync-resolve shortcut; "every discovered module
+    // is pre-registered" does not. Under that shortcut this rejects with
+    // "Could wait for module: @stonyx/t21-sync. Module was not registered in
+    // project dependencies" while the aggregate count is otherwise identical.
+    assert.strictEqual(
+      await raceModule('t21-sync'),
+      'resolved',
+      'every discovered module is pre-registered, so waitForModule resolves'
     );
   });
 

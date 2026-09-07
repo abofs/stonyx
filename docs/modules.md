@@ -296,6 +296,17 @@ await waitForModule('rest-server'); // Waits for @stonyx/rest-server
 
 > **Note:** `waitForModule` is only needed during submodule development or testing. End-user applications don't need it — the CLI ensures all modules are initialized before running your app.
 
+**Circular waits deadlock the boot, and nothing detects the cycle.** If two async
+modules each `await waitForModule` on the other — or a module waits on its own name,
+which is a one-character copy-paste slip in a module that waits on several siblings —
+neither `init()` ever settles, the `Promise.all` in step 6 never resolves, and
+`loadModules` hangs with no error, no timeout and no exit code. The loader cannot
+detect it: `waitForModule` is told which module is being waited **for** and never which
+module is doing the waiting, and Stonyx sets no boot timeout. Keep the wait graph
+acyclic. If two modules genuinely need each other, one of them should do its part of
+the work in `startup()` — which runs after every `init()` has completed — rather than
+waiting for its peer inside `init()`.
+
 ## Official Modules
 
 | Module | Description |

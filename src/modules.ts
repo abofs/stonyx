@@ -226,10 +226,35 @@ export default async function loadModules(
   //     base 5693744  throws "…was not registered in project dependencies", 3 ms
   //     a57045e       one console.warn, then loadModules never settles
   //
-  // Registering only what discovery admitted restores the fail-fast for both,
-  // and for `devDependencies`-declared names too — that half is INHERITED, not
-  // introduced here, and it is a real behaviour change: hang becomes throw.
-  // T13 pins it, and the PR body names it.
+  // Registering only what discovery admitted restores the fail-fast for both
+  // of those DISCOVERY FAILURES, and for `devDependencies`-declared names too
+  // — that half is INHERITED, not introduced here, and it is a real behaviour
+  // change: hang becomes throw. T13 pins it, and the PR body names it.
+  //
+  // SCOPED DELIBERATELY, because the sentence above would otherwise read as a
+  // closure statement for the whole never-settling-promise family and it is
+  // not one. What it closes is names that FAIL discovery. A name that PASSES
+  // discovery is registered, and its promise is resolved only once its own
+  // `init()` has settled — so two discovered modules whose `init()`s await
+  // each other through `waitForModule` are both registered, reach no resolve
+  // site, and leave `await Promise.all(initPromises)` at the end of this
+  // function pending forever. Measured on a cross-map mutual wait
+  // (`@stonyx/c1-a` in `dependencies`, `@stonyx/c1-b` in `devDependencies`,
+  // each `init()` awaiting the other), 3000 ms cap:
+  //     base 5693744  threw in 3 ms — the `dependencies` half was never
+  //                   discovered, so it failed fast for the wrong reason
+  //     a57045e       HUNG, 3001 ms
+  //     f575a3c       HUNG, 3003 ms — scoping registration does not touch it
+  // Rule 3 moves that shape from fail-fast to deadlock and nothing in this
+  // file closes it.
+  //
+  // NO DETECTION IS ATTEMPTED, and that is a decision rather than an
+  // oversight. `waitForModule` is told which module is being waited FOR and
+  // never which module is waiting, so a cycle is not observable without
+  // caller attribution that does not exist here, and this framework sets no
+  // boot timeout to hang a fallback off. A wait cycle is an authoring error in
+  // the modules; docs/modules.md's `waitForModule` section records the hazard
+  // so it is documented rather than merely known.
   //
   // The alternative — resolving in each `continue` branch — also removes the
   // hang and is worse: `waitForModule` would report success for a module that

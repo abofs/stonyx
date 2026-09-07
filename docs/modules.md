@@ -205,12 +205,15 @@ cause written to stderr through a side channel and the thrown error relabelled
 configurations. Module "<name>" failed to load.` — a message wrong about both the file
 and the module. Both of those behaviours are gone; the message no longer exists.
 
-**Two limits of the pre-flight, so absence of a refusal is still not proof.** It only
-looks at `@stonyx/*` packages in the application's `dependencies` or `devDependencies`
-that carry the `stonyx-module` keyword, and it compares physical package roots rather
-than version ranges. A copy dragged in by anything else is not counted, and it fails
-**open** — an unreadable or unparseable manifest, or a running core that cannot
-identify itself, produces a `console.warn` naming the probe and no refusal.
+**Two limits of the pre-flight, so absence of a refusal is still not proof.** The
+modules it starts from are the `@stonyx/*` packages in the application's `dependencies`
+or `devDependencies` that carry the `stonyx-module` keyword, and it compares physical
+package roots rather than version ranges. From each of those modules it follows Node's
+ESM resolution walk and reports the copy that module would import, whoever owns it —
+including `<app>/node_modules/stonyx`, which no module declares. A copy on none of
+those walks is not counted. And it fails **open** — an unreadable or unparseable
+manifest, or a running core that cannot identify itself, produces a `console.warn`
+naming the probe and no refusal.
 
 Absence of an error is not evidence of a single core. Count.
 

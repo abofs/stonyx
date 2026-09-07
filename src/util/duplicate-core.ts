@@ -445,16 +445,32 @@ export function duplicateCoreMessage(foreign: ForeignCore[]): string {
     // de-duplicated union of `dependencies` and `devDependencies`, and until
     // PR #120 fix round 1 this sentence still said `devDependencies` only —
     // so a refusal could name `seen by "@stonyx/x"` for a package declared
-    // ONLY in `dependencies` and then, seven lines later, tell the operator
+    // ONLY in `dependencies` and then, a few lines later, tell the operator
     // that such a declaration is not counted. Reproduced verbatim before the
     // fix. That sends them to search `devDependencies`, where there is nothing.
     // If the scan source ever changes again, this string changes with it;
     // `duplicate-core-test.ts` D4 asserts the claim, not just the header.
+    //
+    // FIX ROUND 2 corrects the closing sentence for the same reason. It used to
+    // exclude "a copy dragged in by ... a package without the keyword", which
+    // is false for the commonest shape there is: `npm install -g stonyx` plus
+    // `stonyx new` writes `stonyx` into the app's own `dependencies`
+    // (`src/cli/new.ts`), `stonyx/package.json` carries no `keywords` field at
+    // all, and every discovered module's ESM walk reaches
+    // `<app>/node_modules/stonyx` — so that copy is counted and PRINTED in the
+    // `seen by` row this sentence sits under. It is the exact case the
+    // duplicate-INSTALL remedy branch above was written for. The sentence now
+    // names what is ENUMERATED — the resolution walk — instead of closing a set
+    // of packages, because the enumeration is a property the code has and the
+    // set is not. D20 pins it against a fixture that counts such a copy.
     'Scope of this check: it compares physical package ROOTS only. It does not check that the ' +
-    'single surviving copy is a compatible version, and it looks at @stonyx/* packages declared in ' +
-    'this app\'s dependencies or devDependencies that carry the "stonyx-module" keyword — nothing ' +
-    'else. Either placement counts: the loader scans the de-duplicated union of both maps. A copy ' +
-    'dragged in by anything outside that set — a transitive dependency, a package without the ' +
-    'keyword, or one not declared in this app\'s manifest at all — is not counted.',
+    'single surviving copy is a compatible version, and the modules it starts from are the ' +
+    '@stonyx/* packages declared in this app\'s dependencies or devDependencies that carry the ' +
+    '"stonyx-module" keyword — nothing else. Either placement counts: the loader scans the ' +
+    'de-duplicated union of both maps. What it then reports is not those packages\' own copies but ' +
+    'the copy each of them would IMPORT: for every one it follows Node\'s ESM resolution walk up ' +
+    'from that module\'s own directory, so a copy owned by any package on that walk is counted — ' +
+    'including this app\'s own node_modules/stonyx, which no module declares. A copy on none of ' +
+    'those walks is not counted.',
   ].join('\n');
 }

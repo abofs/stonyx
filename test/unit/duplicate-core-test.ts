@@ -18,7 +18,7 @@
  */
 import QUnit from 'qunit';
 import { execFile } from 'node:child_process';
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -705,12 +705,17 @@ module('[Unit] duplicate-core detector', function(hooks) {
     // header still said `devDependencies` only — and the assertion above
     // stayed green over a diagnostic that had become false. Reproduced before
     // the fix: a refusal that printed `seen by "@stonyx/dup-mod"` for a
-    // package declared ONLY in `dependencies`, then seven lines later told the
+    // package declared ONLY in `dependencies`, then a few lines later told the
     // operator that such a declaration is not counted.
     //
     // So the assertions below pin the CLAIM. `notOk` is the load-bearing half:
     // an `ok` on the new wording alone would still pass if the old sentence
     // were left sitting beside it.
+    //
+    // WHAT THESE CANNOT DO, stated because round 2 found it out the hard way:
+    // they pin WORDING, over a hand-built `ForeignCore[]`. This test never runs
+    // the check, so a scope sentence that is false about a copy the check
+    // really counts passes here untouched. D20 is the sibling that runs it.
     assert.ok(
       message.includes('declared in this app\'s dependencies or devDependencies'),
       `the scope paragraph names BOTH maps, matching what loadModules scans, got: ${message}`
@@ -726,6 +731,72 @@ module('[Unit] duplicate-core detector', function(hooks) {
     assert.notOk(
       message.includes('this app\'s devDependencies that carry'),
       'nor states the narrow pre-#106 scan source anywhere'
+    );
+  });
+
+  // D20 — THE SCOPE PARAGRAPH, MEASURED AGAINST A COPY THE CHECK ACTUALLY
+  // COUNTS. The sibling D4 asks for and could not be.
+  //
+  // D4 above pins the scope paragraph's wording over a hand-built
+  // `ForeignCore[]`. It never calls `findForeignCores`, so it can catch a
+  // regression to the pre-#106 text and structurally cannot catch the
+  // paragraph being FALSE about a copy the check counts. Round 2 found exactly
+  // that: the closing sentence excluded "a copy dragged in by ... a package
+  // without the keyword", and the commonest shape there is counts one.
+  //
+  // THE SHAPE, and it is the one the docs walk a consumer through:
+  // `npm install -g stonyx` then `stonyx new`. The running core is the global
+  // copy (here, this repo). `stonyx new` writes `stonyx` into the APP's own
+  // `dependencies` (src/cli/new.ts, pinned by new-test.ts "stonyx is in
+  // dependencies"), so `<app>/node_modules/stonyx` exists. It is owned by no
+  // module — `stonyx/package.json` has no `keywords` field at all, asserted
+  // below rather than assumed — and every discovered module's ESM walk reaches
+  // it. So it is counted, and it is the root printed in the `seen by` row that
+  // the scope paragraph sits under.
+  //
+  // WHAT THIS CATCHES AND WHAT IT DOES NOT. The first four assertions are
+  // behavioural and die if the walk stops reaching an app-level copy. The last
+  // three tie the paragraph to them: it must not exclude the class that owns
+  // the copy just counted, and it must describe the ENUMERATION (the walk)
+  // rather than close a set of packages, which is the framing the defect keeps
+  // coming back through. A brand-new false exclusion phrased some third way
+  // would still get past — no prose assertion closes that — but the
+  // package-set framing itself cannot return silently.
+  test('D20: a copy owned by a package outside the discovered set IS counted, and the scope paragraph does not deny it', function(assert) {
+    const rootPath = root({ name: 'd20-app', dependencies: { stonyx: '0.0.0-app-local' }});
+    installModule(rootPath, '@stonyx/d20-mod', { main: 'main.js', keywords: [ 'stonyx-module' ]});
+
+    // `levels: 0` is `<app>/node_modules/stonyx` — the app's own core, which is
+    // what `stonyx new` installs and what a global CLI invocation is NOT.
+    const appLocalCore = installEsmNestedCore(rootPath, '0.0.0-app-local', 0);
+    const moduleDir = join(rootPath, 'node_modules', '@stonyx/d20-mod');
+    const foreign = findForeignCores([ { name: '@stonyx/d20-mod', dir: moduleDir } ]);
+
+    assert.notOk(
+      'keywords' in JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')),
+      'premise: the core package carries no keywords field at all, so it IS "a package without the keyword"'
+    );
+    assert.strictEqual(
+      coreSeenBy(moduleDir)?.root,
+      appLocalCore,
+      'the module would import the app-level copy, which no module declares'
+    );
+    assert.strictEqual(foreign.length, 1, 'and that copy is COUNTED — the check reports it');
+
+    const message = duplicateCoreMessage(foreign);
+
+    assert.ok(message.includes(appLocalCore), 'and printed, in the seen by row the scope paragraph sits under');
+    assert.notOk(
+      message.includes('a package without the keyword'),
+      `so the scope paragraph must not exclude copies owned by keyword-less packages, got: ${message}`
+    );
+    assert.notOk(
+      message.includes('dragged in by anything outside that set'),
+      'nor close the set of PACKAGES, which is the framing that made it false'
+    );
+    assert.ok(
+      message.includes('ESM resolution walk'),
+      'it names what is enumerated instead — the walk each discovered module would resolve through'
     );
   });
 

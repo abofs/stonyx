@@ -116,13 +116,37 @@ export default async function loadModules(
   const modules: StoynxModule[] = [];
   const initPromises: Promise<void>[] = [];
   const rootPackage = await readFile(`${rootPath}/package.json`, { json: true }) as Record<string, unknown>;
-  const dependencies = (rootPackage.devDependencies || {}) as Record<string, string>;
+  // DISCOVERY SOURCE (abofs/stonyx#106 rule 3).
+  //
+  // This local used to be named `dependencies` while holding `devDependencies`
+  // and nothing else. That name is the ruled root cause of #106: every reader
+  // of this function — including its own docs — believed discovery scanned
+  // both maps, because the identifier said so. It did not. An installed stonyx
+  // module declared in `dependencies` was invisible, which is precisely how the
+  // published fleet pins the core, so the loader could not see its own
+  // siblings.
+  //
+  // Rule 3 widens the source to the DE-DUPLICATED union of both maps. Object
+  // spread IS the de-duplication and is load-bearing: a module declared in both
+  // maps collapses to one key, so it is registered once and instantiated once.
+  // A bare `[ ...Object.keys(deps), ...Object.keys(devDeps) ]` concat produces a
+  // byte-identical suite aggregate while instantiating such a module twice and
+  // running its `init()` twice — T22's instance-count assertion owns that kill.
+  const declaredDependencies = {
+    ...(rootPackage.dependencies || {}),
+    ...(rootPackage.devDependencies || {}),
+  } as Record<string, string>;
   const projectName = typeof rootPackage.name === 'string' ? rootPackage.name : '';
 
   // Expose rootPath to public configuration
   config.rootPath = rootPath;
 
-  const moduleDependencies = Object.keys(dependencies as Record<string, string>).filter(
+  // The `@stonyx/` prefix filter STAYS (#106 keeps it explicitly). Widening it
+  // to `@` — or dropping it — makes the loader warn on every non-Stonyx
+  // dependency and leaves their `modulePromises` entries permanently
+  // unresolved. T3 owns that kill. What is a module is decided below, by the
+  // `stonyx-module` keyword; this is only a name test that bounds the scan.
+  const moduleDependencies = Object.keys(declaredDependencies).filter(
     (moduleName: string) => moduleName.startsWith('@stonyx/')
   );
 

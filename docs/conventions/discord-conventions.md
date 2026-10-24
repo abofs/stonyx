@@ -67,7 +67,7 @@ export default class WelcomeHandler extends EventHandler {
 
 ## How do I…
 
-Each answer names the sample that shows it, in abofs/stonyx-discord (private: the links need repository access, and the samples are not in the npm package). `test/unit/sample-patterns-test.ts` in that repo exercises them with a fake REST client and fake interactions.
+Each answer names the sample that shows it, in abofs/stonyx-discord (private: the links need repository access, and the samples are not in the npm package). `test/unit/sample-patterns-test.ts` in that repo runs them: the deploy script against a fake REST client, the router and `color.js` with fake interactions, and a booted bot that discovers the sample command and event directories.
 
 **Register my slash commands with Discord?** Run a deploy script yourself whenever a command's `data` changes. It loads the command directory and PUTs each command's `data.toJSON()` to `Routes.applicationGuildCommands(applicationId, guildId)` with `REST` and `Routes` from `@stonyx/discord/base`. For a global deploy, use `Routes.applicationCommands(applicationId)`. Sample: [`scripts/deploy-commands.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/scripts/deploy-commands.js). It runs outside a booted app, so it follows [Standalone scripts are the exception](./index.md#standalone-scripts-are-the-exception).
 

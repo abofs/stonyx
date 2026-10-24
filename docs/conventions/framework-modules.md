@@ -135,7 +135,7 @@ Utility library organized by domain. Always check here before using Node built-i
 - `deleteFile(filePath, options?)` — delete file, supports `{ ignoreAccessFailure: true }`
 - `createDirectory(dir)` — recursive mkdir
 - `deleteDirectory(dir)` — recursive rm
-- `forEachFileImport(dir, callback, options?)` — iterate and dynamically import all `.js` files in a directory
+- `forEachFileImport(dir, callback, options?)` — iterate and dynamically import every `.js` and `.ts` file in a directory
 - `fileExists(filePath)` — check existence
 
 ### Object Manipulation (`@stonyx/utils/object`)

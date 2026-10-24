@@ -167,3 +167,30 @@ Express-style route params (`:param`) are available via `request.params`.
 ### Binding
 
 Middleware functions are called with `this` bound to the request class instance, so a method works as middleware. The **final** handler of a route is called **without** binding `this`: write it as an arrow function (as `public.ts` does). A class method used as the final handler sees `this === undefined`: `this.x` throws and the request fails with 500, and `this?.x` silently yields `undefined`. A method that never reads `this` works, but write final handlers as arrow functions anyway.
+
+## How do I…
+
+Each answer names the sample that shows it. `test/integration/sample-patterns-test.ts` in abofs/stonyx-rest-server serves every sample below over HTTP and asserts the behaviour described.
+
+**Run the same check (a version gate, say) in front of every route of many request classes?** Put it in a base class that extends `Request`. Middleware added to `this.expressInstance` in its constructor runs before every route of every subclass, and before `auth`. It may be async, and it owns the response, so it can send any status and body. Sample: [`base/api-request.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/base/api-request.ts).
+
+**Share one `auth` across request classes?** Define `auth` on the base class: every subclass inherits it. Keep the base class in a subdirectory such as `requests/base/`, which route discovery does not read, so it is never a route of its own. Sample: [`base/api-request.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/base/api-request.ts), extended by [`accounts.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/accounts.ts).
+
+**Authorize a request?** Compare a credential (a header, a token) in `auth`, in constant time, and return a status such as 401 when it fails. Never authorize on the URL text. Sample: `tokenMatches` and `auth` in [`base/api-request.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/base/api-request.ts).
+
+**Do async work (a database lookup, a remote check) before a handler?** Not in `auth`, which is synchronous. Put it in handler-array middleware, which is awaited: set `state` and return `undefined` to continue, or return a status to stop. Sample: `loadAccount` in [`accounts.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/accounts.ts).
+
+**Set response headers, or a status other than 200 with a JSON body?** For one route, call `request.res.status(201).set(...)` in the handler and return the object. For every route of a class, add `this.expressInstance.use((request, response, next) => { response.set(...); next(); })` in the constructor. Sample: [`widgets.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/widgets.ts).
+
+**Reach the class instance (`this`) in a handler, or reject from middleware?** Write the final handler as an arrow function; a middleware method is bound for you. Return a status code from middleware to reject. Sample: the `/bind` and `/fail` routes in [`public.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/public.ts).
+
+## Not a gap, by design
+
+These are absent on purpose. Each has an intended pattern, so a report that one is missing is a usage question (see [Before you report a gap or bug](./index.md#before-you-report-a-gap-or-bug)).
+
+- **No global request hook.** Each file in `requests/` is its own express sub-app, and nothing registers middleware for all of them. Extend a base `Request` and add the middleware in its constructor (see the first How-do-I above). The sample's header comment says the same.
+- **No async `auth`.** `auth`'s return value is not awaited. A Promise-returning `auth` fails every request with 500, whatever the Promise resolves to (pinned by "auth is synchronous" in `sample-patterns-test.ts`). Do async work in handler-array middleware.
+- **A falsy `auth` return lets the request through.** `undefined`, `false`, `null`, `0` and `''` all reach the handler, and `true` gives a 500. There is no boolean contract: write `if (!ok) return 401;` (see [`auth` Hook](#auth-hook)).
+- **No response argument and no header API on handlers.** Handlers receive `(request, state)`. Use `request.res`, or `this.expressInstance` middleware (see [`widgets.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/widgets.ts)).
+- **The final handler is not bound to `this`.** Only middleware is bound. A method reference as the final handler fails with 500 (pinned by "the final handler is not bound" in `sample-patterns-test.ts`). Use an arrow function.
+- **Route discovery does not recurse.** A class in a subdirectory of `requests/` is not mounted. That is what lets a base class live in `requests/base/`.

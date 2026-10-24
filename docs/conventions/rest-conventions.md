@@ -69,7 +69,8 @@ From `base/api-request.ts`, without its version-gate constructor (see the sample
 import { timingSafeEqual } from 'node:crypto';
 import { Request } from '@stonyx/rest-server';
 
-// Stand-in for your own config or credential lookup.
+// Stand-in. In an app, read the credential from config or the environment
+// (never a literal in source), and refuse to start when it is empty.
 const SAMPLE_TOKEN = Buffer.from('Bearer sample-token');
 
 // timingSafeEqual throws on buffers of different lengths, hence the length check first.
@@ -95,6 +96,8 @@ From `accounts.ts`, which inherits that `auth`:
 import ApiRequest from './base/api-request.js';
 
 // Stand-in for a database or remote lookup.
+// A Map, not an object literal: `ACCOUNTS['constructor']` on a plain object
+// finds Object.prototype and would pass the not-found check.
 const ACCOUNTS = new Map([
   ['1', { id: '1', name: 'Ada' }]
 ]);
@@ -132,22 +135,26 @@ export default class AccountsRequest extends ApiRequest {
 
 Keyed by HTTP method (`get`, `post`, `put`, `patch`, `delete`), each containing route-to-handler mappings. Any other key is skipped with a warning.
 
-Handler signature: `(request, state) => responseData`. `request` is the express request. The return value becomes the response:
-- an object is sent as JSON
-- `undefined` sends 200 with the body `OK`
-- an integer is sent as that status code
-- anything else (a string, for example) is a 500
+Handler signature: `(request, state) => responseData`. `request` is the express request. The return value becomes the response, checked in this order:
+1. an integer is sent as that status code
+2. if `state.redirect` is set (by the handler or any middleware), the response is a 302 to it, whatever the handler returned (an object, `undefined` or a string)
+3. if `state.pipe` is set (`{ source, headers }`), `source` is piped as the body, whatever the handler returned
+4. `undefined` sends 200 with the body `OK`
+5. an object is sent as JSON; `null` counts as an object and sends 200 with an empty body
+6. anything else (a string, `true`) is a 500
 
 ### Middleware Chaining
 
 Use `[middlewareFn, ..., handlerFn]` arrays to run middleware before a handler. Each middleware receives `(request, state)` and is awaited in order, so it may be `async`. It can:
 - Mutate `state` to pass data to the next function
 - Return `undefined` to continue
-- Return anything else to stop the request. That value becomes the response, with the same rules as a handler's return: an integer is a status code, an object is sent as JSON (and the handler never runs)
+- Return anything else to stop the request. The handler never runs, and that value becomes the response under the same rules as a handler's return: an integer is a status code, an object is sent as JSON, `null` is 200 with an empty body, a string is a 500
 
 ### `auth` Hook
 
-Runs before the middleware and handler of every route in the class, after route matching (so `request.params` is populated). Return an error status code to reject the request. If it returns `undefined`, the request proceeds.
+Runs before the middleware and handler of every route in the class, after route matching (so `request.params` is populated). Return a non-zero integer status code (401, 403) to reject the request with that status. Return `undefined` to let it proceed.
+
+**Never return a boolean.** The check is `if (status)`, so **any** falsy return lets the request through: `undefined`, `false`, `null`, `0` and `''` all reach the handler. `true` is not a status code and gives a 500. An `auth` written as `request => tokenMatches(request)` therefore fails open: every bad token gets in, and every good one gets a 500. Write `if (!tokenMatches(...)) return 401;` as the example above does.
 
 `auth` is **synchronous**. Its return value is not awaited, so an `async auth` returns a Promise and every request fails with 500, whether the Promise would resolve to `undefined` or to a status. Put async checks in handler-array middleware (as `accounts.ts` does), or in middleware the class adds to `this.expressInstance` in its constructor (as `base/api-request.ts` does).
 
@@ -159,4 +166,4 @@ Express-style route params (`:param`) are available via `request.params`.
 
 ### Binding
 
-Middleware functions are called with `this` bound to the request class instance, so a method works as middleware. The **final** handler of a route is called **without** binding `this`: write it as an arrow function (as `public.ts` does). A class method used as the final handler sees `this === undefined` and the request fails with 500.
+Middleware functions are called with `this` bound to the request class instance, so a method works as middleware. The **final** handler of a route is called **without** binding `this`: write it as an arrow function (as `public.ts` does). A class method used as the final handler sees `this === undefined`: `this.x` throws and the request fails with 500, and `this?.x` silently yields `undefined`. A method that never reads `this` works, but write final handlers as arrow functions anyway.

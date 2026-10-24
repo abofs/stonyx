@@ -120,15 +120,28 @@ function pack(workDir: string): Packed {
 }
 
 /**
- * The environment npm gives a dependency's postinstall on `npm i <tgz>` (measured under
- * npm 11.6.2): cwd and PWD are the installed package, INIT_CWD is the consumer root,
- * `npm_lifecycle_event` is `postinstall` and `npm_package_json` is the installed
- * package's package.json. Every `npm_*` / `pnpm_*` variable of the runner (`pnpm test`
- * sets `npm_package_json` to this repo's package.json and `npm_lifecycle_event` to
- * `test`) is dropped first, so a postinstall that reads them sees the tarball, not the repo.
- * Likewise every `node_modules/.bin` entry on PATH (`pnpm test` puts this repo's first, which
- * would let the postinstall exec a devDependency's bin) is replaced by the ones npm prepends
- * for the installed package.
+ * An approximation of the environment npm 11.6.2 gives a dependency's postinstall on
+ * `npm i <tgz>`, not a copy of it. Modelled: cwd and PWD are the installed package,
+ * INIT_CWD is the consumer root, `npm_lifecycle_event` is `postinstall`,
+ * `npm_package_json` is the installed package's package.json and `npm_config_user_agent` is
+ * npm's. `npm_config_global` is set to `false`; npm leaves it unset on a local install, and
+ * the postinstall treats both the same (it checks `=== 'true'`). Every `npm_*` / `pnpm_*`
+ * variable of the runner (`pnpm test` sets `npm_package_json` to this repo's package.json and
+ * `npm_lifecycle_event` to `test`) and `NODE_PATH` are dropped first, so a postinstall that
+ * reads them sees the tarball, not the repo. Likewise every `node_modules/.bin` entry on PATH
+ * (`pnpm test` puts this repo's first, which would let the postinstall exec a devDependency's
+ * bin) is replaced by the ones npm prepends for the installed package.
+ *
+ * Not covered: a postinstall that branches on any other variable (npm sets 17 more `npm_*`
+ * ones, measured, and passes `NPM_*` and `NODE_PATH` through; pnpm sets a different set), on a
+ * consumer field beyond the `npm init -y` package.json and tsconfig.json the run tests write,
+ * or on platform (`os`/`cpu`, node version). Any branch keyed on what is missing here is
+ * untested, and can pass this guard and fail `npm i`. stonyx's postinstall branches on none
+ * beyond what is modelled: it reads only `INIT_CWD` and `npm_config_global` from the
+ * environment and only `tsconfig.json` and `config/` from the consumer, and stonyx's
+ * package.json declares no `os`/`cpu`. The authoritative install check is
+ * the live `npm i stonyx` / `npm i -g stonyx` against the registry in the release checklist
+ * (abofs/stonyx#123, refinement validation assertions 2-3).
  */
 function installEnv(packed: Packed, consumerDir: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = Object.fromEntries(
@@ -157,7 +170,7 @@ function installEnv(packed: Packed, consumerDir: string): NodeJS.ProcessEnv {
   });
 }
 
-/** The package.json `npm init -y` writes (measured under npm 11.6.2). */
+/** The fields `npm init -y` writes to package.json under npm 11.6.2 (measured); npm derives `name` from the directory. */
 function npmInitPackageJson(name: string): Record<string, unknown> {
   return {
     name,
@@ -247,7 +260,7 @@ module('[Unit] Publish surface (pnpm pack)', function(hooks) {
 
         const consumerDir = join(packed.workDir, `consumer-${type}`);
         mkdirSync(consumerDir);
-        // Every npm consumer has a package.json; this is what `npm init -y` writes under npm 11.6.2.
+        // Every npm consumer has a package.json: the fields `npm init -y` writes under npm 11.6.2.
         writeFileSync(join(consumerDir, 'package.json'), `${JSON.stringify(npmInitPackageJson(`consumer-${type}`), null, 2)}\n`);
         if (type === 'ts') writeFileSync(join(consumerDir, 'tsconfig.json'), '{}\n');
 

@@ -46,6 +46,7 @@ const INSTALL_LIFECYCLE_SCRIPTS = ['preinstall', 'install'];
 
 interface PackageJson {
   name: string;
+  version: string;
   bin?: Record<string, string> | string;
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
@@ -108,6 +109,32 @@ function pack(workDir: string): Packed {
     symlinkSync(realpathSync(installed), link, 'dir');
   }
   return { workDir, pkgDir, files, pkg };
+}
+
+/**
+ * The environment npm gives a dependency's postinstall on `npm i <tgz>` (measured under
+ * npm 11.6.2): cwd and PWD are the installed package, INIT_CWD is the consumer root,
+ * `npm_lifecycle_event` is `postinstall` and `npm_package_json` is the installed
+ * package's package.json. Every `npm_*` / `pnpm_*` variable of the runner (`pnpm test`
+ * sets `npm_package_json` to this repo's package.json and `npm_lifecycle_event` to
+ * `test`) is dropped first, so a postinstall that reads them sees the tarball, not the repo.
+ */
+function installEnv(packed: Packed, consumerDir: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !/^(npm|pnpm)_/i.test(key) && key !== 'NODE_PATH'),
+  );
+  return Object.assign(env, {
+    INIT_CWD: consumerDir,
+    PWD: packed.pkgDir,
+    npm_command: 'install',
+    npm_config_global: 'false',
+    npm_lifecycle_event: 'postinstall',
+    npm_lifecycle_script: packed.pkg.scripts?.postinstall ?? '',
+    npm_node_execpath: process.execPath,
+    npm_package_json: join(packed.pkgDir, 'package.json'),
+    npm_package_name: packed.pkg.name,
+    npm_package_version: packed.pkg.version,
+  });
 }
 
 /** `scripts.postinstall` from the tarball's package.json, as a package-relative path. */
@@ -187,13 +214,9 @@ module('[Unit] Publish surface (pnpm pack)', function(hooks) {
         mkdirSync(consumerDir);
         if (type === 'ts') writeFileSync(join(consumerDir, 'tsconfig.json'), '{}\n');
 
-        // What npm does for a dependency's postinstall: cwd is the installed package,
-        // INIT_CWD is the consumer root.
-        const env: NodeJS.ProcessEnv = { ...process.env, INIT_CWD: consumerDir, npm_config_global: 'false' };
-        delete env.NODE_PATH;
         const run = spawnSync(process.execPath, [join(packed.pkgDir, script)], {
           cwd: packed.pkgDir,
-          env,
+          env: installEnv(packed, consumerDir),
           encoding: 'utf8',
         });
         assert.strictEqual(run.status, 0, `postinstall exits 0 (stderr: ${run.stderr.trim() || 'empty'})`);

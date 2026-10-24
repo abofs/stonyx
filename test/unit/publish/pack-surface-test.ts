@@ -33,13 +33,16 @@ const { module, test } = QUnit;
  *   - imports the shipped `postinstall-manifest.js`, the data the postinstall itself
  *     copies from, and checks each template it names is in the tarball;
  *   - runs the shipped postinstall for a JS and a TS consumer, with only the tarball's
- *     `dependencies` resolvable, and checks it exits 0 and writes the config.
+ *     `dependencies` resolvable, and checks it exits 0 and writes the config;
+ *   - checks postinstall is the only install-time script, so running it covers install.
  */
 
 const repoRoot = process.cwd();
 
 // The lifecycle scripts `pnpm pack` runs (measured under pnpm 9.15.9 and 10.23.0).
 const PACK_LIFECYCLE_SCRIPTS = ['prepack', 'prepare', 'postpack'];
+// The scripts npm runs for a registry dependency on install, other than postinstall.
+const INSTALL_LIFECYCLE_SCRIPTS = ['preinstall', 'install'];
 
 interface PackageJson {
   name: string;
@@ -136,6 +139,15 @@ module('[Unit] Publish surface (pnpm pack)', function(hooks) {
       assert.notOk(
         pkg.scripts?.[name],
         `scripts.${name} is not declared (the release job's \`pnpm pack\` would run it; this guard packs with scripts ignored)`,
+      );
+    }
+  });
+
+  test('install lifecycle: postinstall is the only script npm runs when a consumer installs the tarball', function(assert) {
+    for (const name of INSTALL_LIFECYCLE_SCRIPTS) {
+      assert.notOk(
+        packed.pkg.scripts?.[name],
+        `tarball package.json does not declare scripts.${name} (npm runs it on install; this guard runs only postinstall)`,
       );
     }
   });

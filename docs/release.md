@@ -12,6 +12,7 @@ See [stonyx-workflows/docs/release.md](https://github.com/abofs/stonyx-workflows
 
 - `scripts.postinstall` and `scripts/postinstall-manifest.js` are in the tarball, and so is every template the manifest names;
 - the shipped postinstall, run for a JS consumer and for a TS consumer with only the tarball's `dependencies` resolvable, exits 0 and writes `config/environment.{js,ts}`;
+- `preinstall` and `install` are not declared, so the postinstall is the only script a consumer install runs;
 - `bin.stonyx` is in the tarball and starts with `#!/usr/bin/env node`;
 - `prepack`, `prepare` and `postpack` are not declared. `pnpm pack` runs them in the release job, and the guard packs with scripts ignored, so a declared one would make the two tarballs differ.
 

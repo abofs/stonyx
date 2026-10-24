@@ -88,36 +88,67 @@ Clients handle I/O; serializers handle structure. Never mix the two.
 
 ## Access Control
 
-Access classes define which models they govern and implement an `access()` method. One access file per logical access boundary in `access/`.
+Access classes define which models they govern and implement an `access()` method. They live in `access/`.
 
-**Structure:** `models` property → `access()` method
+**Reference to copy:** [`test/sample/access/`](https://github.com/abofs/stonyx-orm/tree/dev/test/sample/access) in abofs/stonyx-orm, together with the [REST Server Integration](https://github.com/abofs/stonyx-orm/blob/dev/README.md#rest-server-integration) section of its README. The README's access examples are extracted and run against a live server on every CI run (`test/integration/readme-access/`).
+
+**Structure:** `models` property → `access()` method. Prefer one class per model when the rules are model-specific: `access()` receives only the request, and the request does not name the model.
 
 ```js
-export default class GlobalAccess {
-  models = ['owner', 'animal', 'trait', 'category', 'phone-number'];
+export default class OwnerAccess {
+  models = ['owner'];
 
   access(request) {
-    const { originalUrl: url } = request;
+    // Fail closed on a build that predates abofs/stonyx-orm#270, which never
+    // attaches `recordId`. Without this guard the collection branch below
+    // would fire on the record route and authorize it outright.
+    if (!('recordId' in request)) return false;
+
+    // The id the ORM resolves the record by, already normalised. Authorize
+    // on it, never on a URL and never on raw `params.id`.
+    const { recordId } = request;
 
     // Return false to deny
-    if (url.endsWith('/owners/angela')) return false;
+    if (recordId === 'angela') return false;
 
-    // Return a filter function for conditional access
-    if (url.endsWith('/owners')) return record => record.id !== 'angela';
-    if (url.endsWith('/animals')) return record => record.owner !== 'angela';
+    // No `recordId` means the collection route. A returned function filters the
+    // response records AND authorizes the whole request, POST /owners included.
+    if (recordId === undefined) return record => record.id !== 'angela';
 
-    // Return permission array for full access
+    // Return the allowed operations for everything else
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
 
-The `models` property accepts an array of model names, or `'*'` to match all models.
+```js
+export default class AnimalAccess {
+  models = ['animal'];
+
+  access(request) {
+    if (!('recordId' in request)) return false;
+
+    const { recordId } = request;
+
+    // A belongsTo is the related Record, not its id: compare `.id`
+    // (`?.` so an unowned animal cannot 500 the collection)
+    if (recordId === undefined) return record => record.owner?.id !== 'angela';
+
+    return ['read', 'create', 'update', 'delete'];
+  }
+}
+```
+
+**Authorize on `request.recordId`, never on the URL.** `request.url` is relative to the mount point (`/angela`, not `/owners/angela`), so a suffix match against it never fires. `request.originalUrl` and `request.baseUrl` are the raw text the client sent, so query strings, trailing slashes, casing and percent-encoding all change them while addressing the same record. `request.recordId` is computed by the same function the record lookup uses, so the two cannot disagree. It is `undefined` on collection routes. For a numeric-id model it is a number, so compare it against a number.
+
+**Filter on a relationship's id.** Inside a filter function, a `belongsTo` property is the related Record, not its id. `record.owner !== 'angela'` compares a Record with a string, so it is always true and filters nothing. Use `record.owner?.id`.
+
+The `models` property accepts an array of model names, or `'*'` to match all models. A class may list several models when they share one rule.
 
 `access()` return values:
-- `false` — deny access
-- `function` — filter function applied to response records
-- `string[]` — allowed operations (e.g., `['read', 'create', 'update', 'delete']`)
+- `false` (or any falsy value): deny the request with 403
+- `string[]`: the allowed operations (`'read'`, `'create'`, `'update'`, `'delete'`). A request whose operation is not listed gets 403
+- `function`: **authorizes the whole request, writes included**. The operations list is not consulted, so returning a filter for a collection route also permits `POST` to it. The function is then applied as a filter to the response records. Return a function only where every method on that route may proceed
 
 ## Transforms
 

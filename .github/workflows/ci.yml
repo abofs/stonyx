@@ -13,4 +13,4 @@ permissions:
 
 jobs:
   test:
-    uses: abofs/stonyx-workflows/.github/workflows/ci.yml@main
+    uses: abofs/stonyx-workflows/.github/workflows/ci.yml@feat/122-wire-docs-import-check

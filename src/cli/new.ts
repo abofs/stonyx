@@ -276,7 +276,7 @@ export default config;
 
 export function generateSetupTs(): string {
   return `// Test setup: bootstrap Stonyx with the consumer config before qunit runs.
-// Sprint 44 pattern — loaded via \`node --import ./test/setup.ts\`.
+// Loaded via \`node --import ./test/setup.ts\`.
 import { pathToFileURL } from 'url';
 
 const cwd = process.cwd();
@@ -432,7 +432,7 @@ export async function scaffoldProject(
   // Create test config (TS)
   await createFile(path.join(projectDir, 'test', 'config', 'environment.ts'), generateTestEnvironmentTs());
 
-  // Create Sprint 44 test harness files (setup bootstraps Stonyx, zz-exit-test drains event loop)
+  // Create test harness files (setup bootstraps Stonyx, zz-exit-test drains event loop)
   await createFile(path.join(projectDir, 'test', 'setup.ts'), generateSetupTs());
   await createFile(path.join(projectDir, 'test', 'zz-exit-test.ts'), generateZzExitTestTs());
 }

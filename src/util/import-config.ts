@@ -47,7 +47,7 @@ export const CONFIG_NOT_FOUND_PREFIX = 'Config not found:';
  * with `CONFIG_NOT_FOUND_PREFIX`, because `main.ts`'s `NODE_ENV=test` catch
  * swallows that prefix and must not swallow this.
  *
- * This is invariant I2 of the Sprint 93 install-and-boot cluster — "no silent
+ * This is install-and-boot invariant I2 — "no silent
  * decline". Before #105 the two states were literally indistinguishable:
  * measured against `stonyx@0.2.3-beta.95`, a consumer with `config/environment.ts`
  * and the same consumer after `mv config/environment.js config/environment.xyz`

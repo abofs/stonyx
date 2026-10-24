@@ -50,7 +50,7 @@ module('[Unit] CLI New — TypeScript Blueprints', function () {
     assert.ok(config.exclude.includes('test'), 'excludes test');
   });
 
-  test('generatePackageJson includes TS toolchain and Sprint 44 test script', function (assert) {
+  test('generatePackageJson includes TS toolchain and a test script that preloads setup.ts', function (assert) {
     const output = generatePackageJson('test-app', []);
     const pkg = JSON.parse(output);
 
@@ -158,6 +158,17 @@ module('[Unit] CLI New — Scaffold Output (temp directory)', function (hooks) {
     assert.deepEqual(jsFiles, [], 'no .js files scaffolded into new project');
   });
 
+  test('scaffolded files carry no internal sprint vocabulary', async function (assert) {
+    const files = await collectFiles(projectDir, () => true);
+    assert.ok(files.length > 0, 'scaffold produced files to scan');
+    const hits: string[] = [];
+    for (const file of files) {
+      const content = await fs.readFile(file, 'utf8');
+      if (/\bsprint\s*\d+/i.test(content)) hits.push(path.relative(projectDir, file));
+    }
+    assert.deepEqual(hits, [], 'no scaffolded file mentions a sprint number');
+  });
+
   test('scaffolds tsconfig.json with Stonyx-recommended settings (no paths)', async function (assert) {
     const tsconfigPath = path.join(projectDir, 'tsconfig.json');
     const raw = await fs.readFile(tsconfigPath, 'utf8');
@@ -166,10 +177,10 @@ module('[Unit] CLI New — Scaffold Output (temp directory)', function (hooks) {
     assert.strictEqual(parsed.compilerOptions.strict, true, 'strict mode');
     assert.strictEqual(parsed.compilerOptions.module, 'NodeNext', 'module NodeNext');
     assert.strictEqual(parsed.compilerOptions.target, 'ES2022', 'target ES2022');
-    assert.notOk(parsed.compilerOptions.paths, 'no paths (per Sprint 45 finding)');
+    assert.notOk(parsed.compilerOptions.paths, 'no paths');
   });
 
-  test('scaffolds package.json with tsx + typescript + Sprint 44 test script', async function (assert) {
+  test('scaffolds package.json with tsx + typescript + a test script that preloads setup.ts', async function (assert) {
     const pkgPath = path.join(projectDir, 'package.json');
     const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
 
@@ -181,7 +192,7 @@ module('[Unit] CLI New — Scaffold Output (temp directory)', function (hooks) {
     assert.strictEqual(pkg.scripts.serve, 'stonyx serve', 'serve script present');
   });
 
-  test('scaffolds test/setup.ts and test/zz-exit-test.ts (Sprint 44 pattern)', async function (assert) {
+  test('scaffolds test/setup.ts and test/zz-exit-test.ts', async function (assert) {
     const setupPath = path.join(projectDir, 'test', 'setup.ts');
     const zzPath = path.join(projectDir, 'test', 'zz-exit-test.ts');
 

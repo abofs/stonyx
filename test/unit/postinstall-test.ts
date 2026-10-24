@@ -113,4 +113,31 @@ module('[Unit] Postinstall', function(hooks) {
       'environment.ts was not created alongside existing .js'
     );
   });
+
+  // Cross-extension: the existing-config check covers both extensions whichever type the
+  // consumer is, not only the one the consumer would get.
+  test('JS consumer with an existing `config/environment.ts` gets no environment.js', function(assert) {
+    mkdirSync(join(projectDir, 'config'), { recursive: true });
+    writeFileSync(join(projectDir, 'config/environment.ts'), '// existing consumer config\n');
+
+    runPostinstall(projectDir);
+
+    assert.notOk(
+      existsSync(join(projectDir, 'config/environment.js')),
+      'environment.js was not created alongside existing .ts in a JS consumer'
+    );
+  });
+
+  test('TS consumer with an existing `config/environment.js` gets no environment.ts', function(assert) {
+    writeTsconfig(projectDir);
+    mkdirSync(join(projectDir, 'config'), { recursive: true });
+    writeFileSync(join(projectDir, 'config/environment.js'), '// existing consumer config\n');
+
+    runPostinstall(projectDir);
+
+    assert.notOk(
+      existsSync(join(projectDir, 'config/environment.ts')),
+      'environment.ts was not created alongside existing .js in a TS consumer'
+    );
+  });
 });

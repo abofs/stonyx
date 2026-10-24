@@ -1,5 +1,5 @@
 /**
- * Invariant I1 of the Sprint 93 install-and-boot cluster — "one core".
+ * Install-and-boot invariant I1 — "one core".
  *
  * At `Stonyx.start()`, every discovered module must resolve the SAME physical
  * `stonyx` package root as the running core. Otherwise the app has two

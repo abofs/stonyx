@@ -49,4 +49,4 @@ log.api('Request received');       // If restServer config defines logMethod: 'a
 log.worker('Processing job');      // If myWorker config defines logMethod: 'worker'
 ```
 
-The `stonyx/log` export is a live reference to the Chronicle instance. It will throw if accessed before Stonyx is initialized.
+The `stonyx/log` export is the Chronicle instance, bound once at first import. It throws at import time if Stonyx is not yet initialized, so import it only from code that loads after bootstrap.

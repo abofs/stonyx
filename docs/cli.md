@@ -89,7 +89,7 @@ my-app/
 │   ├── environment.ts
 │   └── environment.example.ts
 ├── test/
-│   ├── setup.ts           # Bootstraps Stonyx via await Stonyx.ready (Sprint 44 pattern)
+│   ├── setup.ts           # Bootstraps Stonyx via await Stonyx.ready
 │   ├── zz-exit-test.ts    # runEnd hook that drains the event loop after tests
 │   ├── config/
 │   │   └── environment.ts
@@ -101,7 +101,7 @@ my-app/
 └── .gitignore
 ```
 
-The scaffolded `package.json` uses the Sprint 44 test pattern:
+The scaffolded `package.json` loads `test/setup.ts` before QUnit, so every test runs against a booted Stonyx:
 
 ```json
 {

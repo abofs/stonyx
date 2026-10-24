@@ -14,7 +14,7 @@ test/
 
 ## File Naming
 
-All test files use the `*-test.js` suffix: `animal-test.js`, `public-request-test.js`.
+Test files use the `*-test.js` or `*-test.ts` suffix: `animal-test.js`, `public-request-test.ts`. `stonyx test` with no arguments runs `test/**/*-test.{js,ts}`; a file without the suffix is not run.
 
 ## Test Framework
 
@@ -24,7 +24,7 @@ All test files use the `*-test.js` suffix: `animal-test.js`, `public-request-tes
 Run tests with `stonyx test` (alias: `stonyx t`), which:
 1. Sets `NODE_ENV=test`
 2. Loads test setup (bootstrap with test config overrides)
-3. Runs QUnit against `test/**/*-test.js`
+3. Runs QUnit against `test/**/*-test.{js,ts}` (or the files and globs you pass)
 
 ## Test Config Overrides
 
@@ -32,15 +32,20 @@ Place test-specific config at `test/config/environment.ts` (or `.js`). Stonyx au
 
 ## Sample / Fixture Files
 
-Each stonyx module's `test/sample/` directory contains reference implementations. Mirror this structure in your project tests:
+Each stonyx module's `test/sample/` directory holds the reference implementations its own test suite loads. They are the code to copy and the layout to mirror in your project's tests, except files a section marks as test fixtures: the ORM's `access/global-access.ts` ([ORM Conventions](./orm-conventions.md#access-control)) and the REST server's `requests/private.ts` ([REST Conventions](./rest-conventions.md)) are fixtures the suite asserts against, and their shape is not one to copy. Modules that discover directories (ORM, REST server, Discord, sockets) point their test config at these directories. OAuth discovers nothing: its test config names the sample provider file through `oauth.providers.mock.module` (see [Framework Modules](./framework-modules.md#stonyxoauth)).
 
-- `test/sample/models/` — model fixtures
-- `test/sample/serializers/` — serializer fixtures
-- `test/sample/access/` — access control fixtures
-- `test/sample/transforms/` — transform fixtures
-- `test/sample/requests/` — request handler fixtures
+| Module | `test/sample/` contents |
+|---|---|
+| [`@stonyx/orm`](https://github.com/abofs/stonyx-orm/tree/dev/test/sample) | `models/`, `serializers/`, `access/`, `transforms/`, `views/`, `db-schema.ts`, `constants.ts` |
+| [`@stonyx/rest-server`](https://github.com/abofs/stonyx-rest-server/tree/dev/test/sample/requests) | `requests/` (with a base class in `requests/base/`) |
+| `@stonyx/discord` (abofs/stonyx-discord, private) | `discord-commands/`, `discord-events/`, `scripts/deploy-commands.js` |
+| [`@stonyx/sockets`](https://github.com/abofs/stonyx-sockets/tree/dev/test/sample/socket-handlers) | `socket-handlers/` |
+| [`@stonyx/oauth`](https://github.com/abofs/stonyx-oauth/tree/dev/test/sample/providers) | `providers/mock.ts` (a custom provider, loaded through its config entry) |
+| [`@stonyx/cron`](https://github.com/abofs/stonyx-cron/blob/dev/test/sample/payload.ts) | `payload.ts` (job definitions) |
+| [`@stonyx/events`](https://github.com/abofs/stonyx-events/tree/dev/test/sample) | `convenience.ts`, `class.ts` |
+| [`@stonyx/utils`](https://github.com/abofs/stonyx-utils/tree/dev/test/sample) | one file per import path |
 
-The file ordering in tests should mirror the sample files from each module's `test/sample/` directory.
+The samples are not in the npm packages. Most are TypeScript; see [REST Conventions](./rest-conventions.md) for how to copy one as JavaScript.
 
 ## Running Tests
 
@@ -49,8 +54,8 @@ The file ordering in tests should mirror the sample files from each module's `te
 stonyx test
 
 # Run specific test file
-stonyx test test/unit/animal-test.js
+stonyx test test/unit/animal-test.ts
 
 # Run specific glob
-stonyx test "test/integration/**/*-test.js"
+stonyx test "test/integration/**/*-test.ts"
 ```

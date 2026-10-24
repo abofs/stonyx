@@ -12,7 +12,7 @@ Conventions for projects using `@stonyx/discord`.
 - Each file default-exports a class extending the default export of `@stonyx/discord/command`
 - Class must define a `data` property (a `SlashCommandBuilder` instance) and an `async execute(interaction)` method
 - Class ordering: static properties → `data` → `execute()`
-- Filenames use kebab-case; `forEachFileImport` converts to camelCase for internal registration
+- Filenames use kebab-case. The file name does not name the command: a command is registered under the name set on its `SlashCommandBuilder` (`data.name`), and that is the name users type
 - Permission checks belong in the consuming application, not in the module
 
 ```js

@@ -29,19 +29,23 @@ Flat file structure at root level — non-directory project files live at the pr
 
 ### Standard Directories
 
-| Directory | Purpose | When to create |
-|-----------|---------|----------------|
-| `config/` | Configuration files | Always |
-| `models/` | ORM model definitions | When using `@stonyx/orm` |
-| `serializers/` | Data serializers | When using `@stonyx/orm` |
-| `access/` | Access control definitions | When using `@stonyx/orm` |
-| `transforms/` | Value transforms | When using `@stonyx/orm` |
-| `hooks/` | Lifecycle hooks | When using `@stonyx/orm` |
-| `requests/` | REST request handlers | When using `@stonyx/rest-server` |
-| `crons/` | Scheduled tasks | When using `@stonyx/cron` |
-| `clients/` | External API clients | When fetching external data |
-| `test/`| Tests | Always |
-| `utils.js` or `utils/` | Project-specific reusable logic | As needed (never duplicate `@stonyx/utils`) |
+A module loads files only from the directories it is configured to discover. Each default below can be changed through the config key shown (or its environment variable).
+
+| Directory | Discovered by | Config key (env var) |
+|-----------|---------------|----------------------|
+| `config/` | Stonyx core (`config/environment.js`) | — |
+| `models/` | `@stonyx/orm` | `orm.paths.model` (`ORM_MODEL_PATH`) |
+| `serializers/` | `@stonyx/orm` | `orm.paths.serializer` (`ORM_SERIALIZER_PATH`) |
+| `transforms/` | `@stonyx/orm` | `orm.paths.transform` (`ORM_TRANSFORM_PATH`) |
+| `views/` | `@stonyx/orm` | `orm.paths.view` (`ORM_VIEW_PATH`) |
+| `access/` | `@stonyx/orm`, when its REST routes are enabled | `orm.paths.access` (`ORM_ACCESS_PATH`) |
+| `requests/` | `@stonyx/rest-server` (not recursive) | `restServer.dir` (`REST_REQUEST_PATH`) |
+| `discord-commands/` | `@stonyx/discord` | `discord.commandDir` (`DISCORD_COMMAND_DIR`) |
+| `discord-events/` | `@stonyx/discord` | `discord.eventDir` (`DISCORD_EVENT_DIR`) |
+| `socket-handlers/` | `@stonyx/sockets` | `sockets.handlerDir` (`SOCKET_HANDLER_DIR`) |
+| `migrations/` | `@stonyx/orm`, only with a MySQL, Postgres or TimescaleDB adapter: its `*.sql` files are checked for pending migrations at startup | `orm.mysql.migrationsDir` / `orm.postgres.migrationsDir` / `orm.timescale.migrationsDir` (`MYSQL_MIGRATIONS_DIR` / `PG_MIGRATIONS_DIR` / `TIMESCALE_MIGRATIONS_DIR`) |
+
+No module discovers anything else. Two app directories are run by tooling rather than by a module: `stonyx test` runs `test/**/*-test.{js,ts}` (see [Testing Conventions](./testing-conventions.md)), and `scripts/` holds standalone scripts you run with `node` (see [the exception to the universal rules](./index.md#standalone-scripts-are-the-exception)). Everything else the app owns, such as `utils.js` or `utils/` (project-specific logic; never duplicate `@stonyx/utils`), `clients/` (external API clients), or code that registers ORM hooks or cron jobs, runs only when your code imports it. `stonyx serve` imports `app.js`, but `stonyx test` does not, so code imported only from `app.js` does not run in tests (see [ORM Conventions](./orm-conventions.md#hooks) for hooks). In particular, there is no `hooks/` directory: ORM hooks are registered by calling `beforeHook` / `afterHook`, and cron jobs by calling `register` or `CronService.add`.
 
 ### Nested Model Directories
 
@@ -99,7 +103,6 @@ export default class DBModel extends Model {
 }
 ```
 
-## Reference Projects
+## Reference
 
-- `smart-lock-backend/` — full example with REST, ORM, sockets, crons, hooks
-- `nextgoal-backend/` — example with models, transforms, filters, bot commands
+Each module's `test/sample/` directory is the reference for the files that go in that module's directory; the [Testing Conventions](./testing-conventions.md#sample--fixture-files) table lists them. Where a module discovers a directory, its `test/sample/` has a directory of the same name, and the module's test config points the discovery path there. The ORM's `test/sample/migrations/` is the exception: it holds only a `.gitkeep`.

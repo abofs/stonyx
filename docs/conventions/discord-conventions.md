@@ -64,3 +64,26 @@ export default class WelcomeHandler extends EventHandler {
 ```
 
 `stonyx-async` indicates the module's `init()` is async and must be awaited by the framework.
+
+## How do I…
+
+Each answer names the sample that shows it, in abofs/stonyx-discord (private: the links need repository access, and the samples are not in the npm package). `test/unit/sample-patterns-test.ts` in that repo exercises them with a fake REST client and fake interactions.
+
+**Register my slash commands with Discord?** Run a deploy script yourself whenever a command's `data` changes. It loads the command directory and PUTs each command's `data.toJSON()` to `Routes.applicationGuildCommands(applicationId, guildId)` with `REST` and `Routes` from `@stonyx/discord/base`. For a global deploy, use `Routes.applicationCommands(applicationId)`. Sample: [`scripts/deploy-commands.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/scripts/deploy-commands.js). It runs outside a booted app, so it follows [Standalone scripts are the exception](./index.md#standalone-scripts-are-the-exception).
+
+**Handle buttons and autocomplete?** Write an event handler with `static event = 'interactionCreate'` that routes autocomplete by `interaction.commandName` and buttons by `customId` to methods on the command, and ignores chat-input interactions (the bot already runs those). Sample: [`discord-events/interaction-create.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-events/interaction-create.js), with the `autocomplete()` and `button()` methods in [`discord-commands/color.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-commands/color.js).
+
+**Restrict who can press a button?** Check `interaction.user` or `interaction.memberPermissions` in the command's `button()` method. The interaction-create sample's header comment explains why: a command's permission settings apply to running the slash command, not to buttons on its replies or to autocomplete. Sample: [`discord-events/interaction-create.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-events/interaction-create.js).
+
+**Reply with an embed or a button row?** Import `EmbedBuilder`, `ActionRowBuilder`, `ButtonBuilder` and `ButtonStyle` from `@stonyx/discord/base`, not from `discord.js`. Sample: `buildEmbed()` and `execute()` in [`discord-commands/color.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-commands/color.js).
+
+**Import `Command`, `EventHandler` or `DiscordBot`?** Each is the default export of its own subpath: `@stonyx/discord/command`, `/event-handler`, `/bot`. The root exports only `Discord`. Samples: [`discord-commands/ping.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-commands/ping.js) and [`discord-events/log-message.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-events/log-message.js).
+
+## Not a gap, by design
+
+These are absent on purpose. Each has an intended pattern, so a report that one is missing is a usage question (see [Before you report a gap or bug](./index.md#before-you-report-a-gap-or-bug)).
+
+- **The module never registers slash commands with Discord.** It loads command classes at boot and dispatches them, but registration is the app's deploy script (see the first How-do-I above). `src/` contains no `applicationCommands` or `applicationGuildCommands` call.
+- **The bot dispatches only chat-input interactions.** Its own `interactionCreate` listener returns early for everything else. Buttons, autocomplete, select menus and modals belong to an app event handler. With the sample handler discovered, a slash command still runs exactly once (pinned by "wired into a booted bot" in `sample-patterns-test.ts`).
+- **No named exports from the `@stonyx/discord` root.** `import { Command } from '@stonyx/discord'` does not resolve. Import from the subpaths (see [Exports](./framework-modules.md#stonyxdiscord)).
+- **`@stonyx/discord/base` re-exports a fixed set of discord.js names**, listed at the top of this page. It is not all of discord.js: an app that needs another name (say `ModalBuilder`) declares its own `discord.js` dependency.

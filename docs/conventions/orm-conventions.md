@@ -170,7 +170,7 @@ The sample fixture carries the same warning: "Intentional Gap: this denies only 
 
 To keep a record private, every model that can reach it through a relationship needs its own rule, in its own access class. A filter is not that rule: it filters only the `GET` collection, and on every other route it authorizes the request. On record and relationship routes, look the record up and return `false`, as `PrivateAnimalAccess` does. With `OwnerAccess` and `PrivateAnimalAccess`, and both models held in memory (below), `GET /animals/1`, `GET /animals/1/owner`, `GET /animals/1/relationships/owner`, `GET /animals/1?include=owner`, `PATCH /animals/7` and `DELETE /animals/7` all return 403, and `GET /animals` omits her animals. `POST /animals` is still authorized, because the collection rule is a function. The ORM does not enforce a boundary across models for you, so verify each route of each model that can reach the record against a running server, on the storage backend you deploy.
 
-**The lookup needs the records in memory.** `store.get` reads only the in-memory store, and `access()` cannot await `store.find`. In JSON file mode every record is in memory. With a MySQL or Postgres adapter, a model's records are in memory only if the model declares `static memory = true`; the default is `false`. Without it, `store.get` returns `undefined`, `record.owner` is `undefined` in the filter, and `PrivateAnimalAccess` allows every route on her animals, `PATCH` and `DELETE` included, and `GET /animals` lists them. Declare it on every model the rule reads, here `animal` and `owner`:
+**The lookup needs the records in memory.** `store.get` reads only the in-memory store, and `access()` cannot await `store.find`. Only JSON file mode holds every record in memory. With a database adapter (MySQL, Postgres, TimescaleDB or DynamoDB), a model's records are in memory only if the model declares `static memory = true`; the default is `false`. Without it, `store.get` returns `undefined`, `record.owner` is `undefined` in the filter, and `PrivateAnimalAccess` allows every route on her animals, `PATCH` and `DELETE` included, and `GET /animals` lists them. Declare it on every model the rule reads, here `animal` and `owner`:
 
 ```js
 import { Model, attr, belongsTo } from '@stonyx/orm';
@@ -229,7 +229,7 @@ The store is the in-memory data layer. Use it for internal app logic (not REST A
 ```js
 import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
 
-// Read — sync, from memory only. With a SQL adapter, requires static memory = true
+// Read — sync, from memory only. With a database adapter, requires static memory = true
 // on the model (the default is false); in JSON file mode every record is in memory
 const record = store.get('animal', 1);
 const allAnimals = store.data.get('animals');

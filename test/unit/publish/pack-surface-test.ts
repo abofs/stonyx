@@ -146,6 +146,8 @@ function installEnv(packed: Packed, consumerDir: string): NodeJS.ProcessEnv {
     PWD: packed.pkgDir,
     npm_command: 'install',
     npm_config_global: 'false',
+    // What npm 11.6.2 sends; package-manager detection reads this.
+    npm_config_user_agent: `npm/11.6.2 node/${process.version} ${process.platform} ${process.arch} workspaces/false`,
     npm_lifecycle_event: 'postinstall',
     npm_lifecycle_script: packed.pkg.scripts?.postinstall ?? '',
     npm_node_execpath: process.execPath,
@@ -153,6 +155,21 @@ function installEnv(packed: Packed, consumerDir: string): NodeJS.ProcessEnv {
     npm_package_name: packed.pkg.name,
     npm_package_version: packed.pkg.version,
   });
+}
+
+/** The package.json `npm init -y` writes (measured under npm 11.6.2). */
+function npmInitPackageJson(name: string): Record<string, unknown> {
+  return {
+    name,
+    version: '1.0.0',
+    description: '',
+    main: 'index.js',
+    scripts: { test: 'echo "Error: no test specified" && exit 1' },
+    keywords: [],
+    author: '',
+    license: 'ISC',
+    type: 'commonjs',
+  };
 }
 
 /** `scripts.postinstall` from the tarball's package.json, as a package-relative path. */
@@ -230,6 +247,8 @@ module('[Unit] Publish surface (pnpm pack)', function(hooks) {
 
         const consumerDir = join(packed.workDir, `consumer-${type}`);
         mkdirSync(consumerDir);
+        // Every npm consumer has a package.json; this is what `npm init -y` writes under npm 11.6.2.
+        writeFileSync(join(consumerDir, 'package.json'), `${JSON.stringify(npmInitPackageJson(`consumer-${type}`), null, 2)}\n`);
         if (type === 'ts') writeFileSync(join(consumerDir, 'tsconfig.json'), '{}\n');
 
         const run = spawnSync(process.execPath, [join(packed.pkgDir, script)], {

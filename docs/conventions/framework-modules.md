@@ -219,7 +219,18 @@ Exports: `SocketServer`, `SocketClient`, `Handler`, `Sockets`
 
 Discord bot with command and event handler auto-discovery. Class ordering: static properties → `data` / `static event` → `execute()` / `handle()`.
 
-Exports: `DiscordBot`, `Command`, `EventHandler`, `Discord`, `chunkMessage`
+Exports (each from its own subpath; the root exports only `Discord`):
+
+```js
+import Discord from '@stonyx/discord';
+import DiscordBot from '@stonyx/discord/bot';
+import Command from '@stonyx/discord/command';
+import EventHandler from '@stonyx/discord/event-handler';
+import { chunkMessage } from '@stonyx/discord/message';
+import { SlashCommandBuilder } from '@stonyx/discord/base';
+```
+
+**Reference to copy:** the Quick Start in the `@stonyx/discord` README (shipped in the package), and the samples under `test/sample/` in abofs/stonyx-discord ([online](https://github.com/abofs/stonyx-discord/tree/dev/test/sample), with repository access). See [Discord Conventions](./discord-conventions.md).
 
 ## `@stonyx/oauth`
 

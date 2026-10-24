@@ -29,6 +29,18 @@ stonyx help     # Show all available commands
 
 Stonyx reads `config/environment.ts` (preferred) or `config/environment.js`, initializes all `@stonyx/*` modules from your `devDependencies`, and runs your application.
 
+## Exports
+
+| Import path | What it exports |
+|-------------|-----------------|
+| `stonyx` | `Stonyx` class (default), `waitForModule(name)` |
+| `stonyx/config` | Live reference to the Stonyx config (default) |
+| `stonyx/log` | Live reference to the Chronicle logger (default) |
+| `stonyx/lifecycle` | `runStartupHooks(modules)`, `runShutdownHooks(modules)` |
+| `stonyx/test-helpers` | `setupIntegrationTests(hooks)` |
+
+`stonyx/config` and `stonyx/log` throw if read before Stonyx is initialized. See the [API Reference](docs/api.md) for details.
+
 ## Documentation
 
 | Section | Description |

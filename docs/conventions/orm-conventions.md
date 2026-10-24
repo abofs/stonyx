@@ -90,11 +90,13 @@ Clients handle I/O; serializers handle structure. Never mix the two.
 
 Access classes define which models they govern and implement an `access()` method. They live in `access/`.
 
-**Reference to copy:** the `OwnerAccess` and `AnimalAccess` examples in the "REST Server Integration" section of the `@stonyx/orm` README. The README ships in the package (`node_modules/@stonyx/orm/README.md`), and abofs/stonyx-orm's `pnpm test:readme` extracts those examples and runs them against a live server on every CI run (`test/integration/readme-access/`). Online: [REST Server Integration](https://github.com/abofs/stonyx-orm/blob/dev/README.md#rest-server-integration).
+**Reference to copy:** the `OwnerAccess` example in the "REST Server Integration" section of the `@stonyx/orm` README; the README's `AnimalAccess` shows the same deny for a numeric id. The README ships in the package (`node_modules/@stonyx/orm/README.md`), and abofs/stonyx-orm's `pnpm test:readme` extracts both examples and runs them against a live server on every CI run (`test/integration/readme-access/`). Online: [REST Server Integration](https://github.com/abofs/stonyx-orm/blob/dev/README.md#rest-server-integration).
 
-The repo's `test/sample/access/global-access.ts` is a test fixture that demonstrates a deny, a collection filter and the `owner?.id` filter together. Do not copy its shape: it derives the model from `request.baseUrl`, which the rules below advise against, and it has no `'recordId' in request` guard. Read its "Intentional Gap" note, which applies to the classes below as well (see [A deny is not a record boundary](#a-deny-is-not-a-record-boundary)).
+The repo's `test/sample/access/global-access.ts` is a test fixture that demonstrates a deny, a collection filter and the `owner?.id` filter together. Do not copy its shape: it derives the model from `request.baseUrl`, which the rules below advise against, and it has no `'recordId' in request` guard. Read its "Intentional Gap" note, which applies to the README examples as well (see [A deny is not a record boundary](#a-deny-is-not-a-record-boundary)).
 
 **Structure:** `models` property → `access()` method. Prefer one class per model when the rules are model-specific: `access()` receives only the request, and the request does not name the model.
+
+`OwnerAccess` below is the README's. `PrivateAnimalAccess` is not in the README and `test:readme` does not run it; it shows the record-route rule described in [A deny is not a record boundary](#a-deny-is-not-a-record-boundary).
 
 ```js
 export default class OwnerAccess {
@@ -124,7 +126,9 @@ export default class OwnerAccess {
 ```
 
 ```js
-export default class AnimalAccess {
+import { store } from '@stonyx/orm';
+
+export default class PrivateAnimalAccess {
   models = ['animal'];
 
   access(request) {
@@ -132,16 +136,21 @@ export default class AnimalAccess {
 
     const { recordId } = request;
 
+    // Collection route: the filter removes angela's animals from the response.
     // A belongsTo is the related Record, not its id: compare `.id`
     // (`?.` so an unowned animal cannot 500 the collection)
     if (recordId === undefined) return record => record.owner?.id !== 'angela';
+
+    // Record and relationship routes: a filter would authorize these outright,
+    // so look the record up and deny. access() is synchronous: use store.get.
+    if (store.get('animal', recordId)?.owner?.id === 'angela') return false;
 
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
 
-**Authorize on `request.recordId`, never on the URL.** `request.url` is relative to the mount point (`/angela`, not `/owners/angela`), so a suffix match against it never fires. `request.originalUrl` is the raw text the client sent, so query strings, trailing slashes, casing and percent-encoding all change it while addressing the same record. `request.baseUrl` is the mount as the client spelled it, so casing changes it (`/OwNeRs` reaches the `owners` routes with `baseUrl` `/OwNeRs`). `request.recordId` is computed by the same function the record lookup uses, so the two cannot disagree. It is `undefined` on collection routes. For a numeric-id model it is a number, so compare it against a number.
+**Authorize on `request.recordId`, never on the URL.** `request.url` is relative to the mount point (`/angela`, not `/owners/angela`), so a suffix match against it never fires. `request.originalUrl` is the raw text the client sent, so query strings, trailing slashes, casing and percent-encoding all change it while addressing the same record. `request.baseUrl` is the mount as the client spelled it. The rest server matches routes case-sensitively by default, so `/OwNeRs/angela` returns 404; with `restServer.caseSensitiveRoutes: false` it reaches the `owners` routes with `baseUrl` `/OwNeRs`. `request.recordId` is computed by the same function the record lookup uses, so the two cannot disagree. It is `undefined` on collection routes. For a numeric-id model it is a number, so compare it against a number.
 
 **Filter on a relationship's id.** Inside a filter function, a `belongsTo` property is the related Record, not its id. `record.owner !== 'angela'` compares a Record with a string, so it is always true and filters nothing. Use `record.owner?.id`.
 
@@ -150,18 +159,15 @@ The `models` property accepts an array of model names, or `'*'` to match all mod
 `access()` return values:
 - `false` (or any falsy value): deny the request with 403
 - `string[]`: the allowed operations (`'read'`, `'create'`, `'update'`, `'delete'`). A request whose operation is not listed gets 403
-- `function`: **authorizes the whole request, writes included**. The operations list is not consulted, so returning a filter for a collection route also permits `POST` to it. The function is then applied as a filter to the response records. Return a function only where every method on that route may proceed
+- `function`: **authorizes the whole request, writes included**. The operations list is not consulted, so returning a filter for a collection route also permits `POST` to it. The function filters only the primary records of a `GET` collection response. On record routes, relationship routes and `included` it filters nothing, so there it grants access outright. Return a function only on the collection route, and only where every method on that route may proceed
 
 ### A deny is not a record boundary
 
-**These two classes do not make angela's data private.** A `false` or a filter in one model's access class protects a record only on that model's own routes. Relationship routes (`/:id/<relationship>`, `/:id/relationships/<relationship>`) and `?include=` are authorized only by the access class of the route's *source* model; the related model's class is never consulted. With the two classes above, `/owners/angela` is refused, but:
+**A deny protects a record only on its own model's routes.** Relationship routes (`/:id/<relationship>`, `/:id/relationships/<relationship>`) and `?include=` are authorized only by the access class of the route's *source* model; the related model's class is never consulted. With the README's `OwnerAccess` and `AnimalAccess`, `/owners/angela` is refused, but `GET /animals/1/owner`, `GET /animals/1/relationships/owner` and `GET /animals/1?include=owner` serve her owner record (200), because the README's `AnimalAccess` authorizes them. Her other animals are open as well: `GET /animals/1` returns 200, and `GET /animals` lists every one of hers except 7, the id the README denies.
 
-- `GET /animals/1/owner`, `GET /animals/1/relationships/owner` and `GET /animals/1?include=owner` serve her owner record (200), because `AnimalAccess` authorizes them.
-- Her animals are open by id: `GET /animals/1` returns 200, `PATCH /animals/7` returns 200 and `DELETE /animals/7` returns 204.
+The sample fixture carries the same warning: "Intentional Gap: this denies only /owners/angela and filters angela out of /owners. Her data is still served on related routes: her animals by id (/animals/1), her full owner record via an animal (/animals/1/owner), its linkage (/animals/1/relationships/owner), and her pets (/owners/angela/pets). A per-route deny is not a record boundary." (`/owners/angela/pets` is refused under `OwnerAccess`, because it denies every route whose `recordId` is `angela`.)
 
-The sample fixture carries the same warning: "Intentional Gap: this denies only /owners/angela and filters angela out of /owners. Her data is still served on related routes: her animals by id (/animals/1), her full owner record via an animal (/animals/1/owner), its linkage (/animals/1/relationships/owner), and her pets (/owners/angela/pets). A per-route deny is not a record boundary." (`/owners/angela/pets` is refused under the classes above, because `OwnerAccess` denies every route whose `recordId` is `angela`.)
-
-To keep a record private, every model that can reach it through a relationship needs its own rule, in its own access class, for its record routes, its relationship routes and its `?include=` responses. The ORM does not enforce a boundary across models for you, so verify each of those routes against a running server.
+To keep a record private, every model that can reach it through a relationship needs its own rule, in its own access class. A filter is not that rule: it filters only the `GET` collection, and on every other route it authorizes the request. On record and relationship routes, look the record up and return `false`, as `PrivateAnimalAccess` does. With `OwnerAccess` and `PrivateAnimalAccess`, `GET /animals/1`, `GET /animals/1/owner`, `GET /animals/1/relationships/owner`, `GET /animals/1?include=owner`, `PATCH /animals/7` and `DELETE /animals/7` all return 403, and `GET /animals` omits her animals. `POST /animals` is still authorized, because the collection rule is a function. The ORM does not enforce a boundary across models for you, so verify each route of each model that can reach the record against a running server.
 
 ## Transforms
 

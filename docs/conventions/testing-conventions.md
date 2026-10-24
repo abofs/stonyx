@@ -32,7 +32,7 @@ Place test-specific config at `test/config/environment.ts` (or `.js`). Stonyx au
 
 ## Sample / Fixture Files
 
-Each stonyx module's `test/sample/` directory holds the reference implementations its own test suite loads. They are the code to copy, and the layout to mirror in your project's tests. Modules that discover files (ORM, REST server, Discord, sockets, OAuth) point their test config at these directories:
+Each stonyx module's `test/sample/` directory holds the reference implementations its own test suite loads. They are the code to copy and the layout to mirror in your project's tests, except files a section marks as test fixtures: the ORM's `access/global-access.ts` ([ORM Conventions](./orm-conventions.md#access-control)) and the REST server's `requests/private.ts` ([REST Conventions](./rest-conventions.md)) are fixtures the suite asserts against, and their shape is not one to copy. Modules that discover directories (ORM, REST server, Discord, sockets) point their test config at these directories. OAuth discovers nothing: its test config names the sample provider file through `oauth.providers.mock.module` (see [Framework Modules](./framework-modules.md#stonyxoauth)).
 
 | Module | `test/sample/` contents |
 |---|---|
@@ -40,7 +40,7 @@ Each stonyx module's `test/sample/` directory holds the reference implementation
 | [`@stonyx/rest-server`](https://github.com/abofs/stonyx-rest-server/tree/dev/test/sample/requests) | `requests/` (with a base class in `requests/base/`) |
 | `@stonyx/discord` (abofs/stonyx-discord, private) | `discord-commands/`, `discord-events/`, `scripts/deploy-commands.js` |
 | [`@stonyx/sockets`](https://github.com/abofs/stonyx-sockets/tree/dev/test/sample/socket-handlers) | `socket-handlers/` |
-| [`@stonyx/oauth`](https://github.com/abofs/stonyx-oauth/tree/dev/test/sample/providers) | `providers/` (a custom provider) |
+| [`@stonyx/oauth`](https://github.com/abofs/stonyx-oauth/tree/dev/test/sample/providers) | `providers/mock.ts` (a custom provider, loaded through its config entry) |
 | [`@stonyx/cron`](https://github.com/abofs/stonyx-cron/blob/dev/test/sample/payload.ts) | `payload.ts` (job definitions) |
 | [`@stonyx/events`](https://github.com/abofs/stonyx-events/tree/dev/test/sample) | `convenience.ts`, `class.ts` |
 | [`@stonyx/utils`](https://github.com/abofs/stonyx-utils/tree/dev/test/sample) | one file per import path |

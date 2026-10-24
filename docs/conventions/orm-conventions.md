@@ -228,7 +228,23 @@ Register hooks by **calling** `beforeHook(operation, model, handler)` / `afterHo
 import { beforeHook, afterHook } from '@stonyx/orm';
 ```
 
-Nothing discovers hook files: the ORM does not load a `hooks/` directory, so a file there runs only if your code imports it. Make the calls from code that runs at startup, such as `app.js`, or from a module it imports. The hook API, the context object and examples are in the [Lifecycle Hooks](https://github.com/abofs/stonyx-orm/blob/dev/README.md#lifecycle-hooks) section of the ORM README.
+Nothing discovers hook files: the ORM does not load a `hooks/` directory, so a file there runs only if your code imports it. Put the calls in one module of their own (for example `hooks.js`) and import it from `app.js`. `stonyx test` never imports `app.js`, so hooks registered only there are absent from the whole test suite: also import that module from every test file that relies on a hook. A module runs once per process however many files import it, so the hooks are not registered twice.
+
+```js
+// hooks.js
+import { beforeHook } from '@stonyx/orm';
+
+beforeHook('create', 'animal', context => {
+  if (!context.body.data.attributes.name) return 400;
+});
+```
+
+```js
+// app.js, and every test file that relies on a hook
+import './hooks.js';
+```
+
+The hook API, the context object and examples are in the [Lifecycle Hooks](https://github.com/abofs/stonyx-orm/blob/dev/README.md#lifecycle-hooks) section of the ORM README.
 
 ## DB Schema
 

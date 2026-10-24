@@ -16,9 +16,24 @@ Universal rules that apply to every Stonyx project. Section-specific conventions
 
 ### Standalone scripts are the exception
 
-The logging and file rules apply to code running inside a booted Stonyx app. A standalone script that runs on its own with `node` (a slash-command deploy script, a one-off data fix) uses `console` and `node:` built-ins instead. `stonyx/log` and `stonyx/config` throw `Stonyx has not been initialized yet` when they are imported outside a booted app, and `@stonyx/utils` may not be a dependency of the app at all.
+The logging rule applies to code running inside a booted Stonyx app. A standalone script that runs on its own with `node` (a slash-command deploy script, a one-off data fix) logs with `console`, because `stonyx/log` and `stonyx/config` throw `Stonyx has not been initialized yet` when they are imported outside a booted app. Read settings from `process.env` for the same reason.
 
-The reference is `test/sample/scripts/deploy-commands.js` in the `@stonyx/discord` repository (abofs/stonyx-discord, private; the file is not in the npm package). It imports `readdir` from `node:fs/promises`, reports with `console.log` / `console.error`, and imports only `REST` and `Routes` from `@stonyx/discord/base`. Keep such scripts out of the directories a module discovers (`requests/`, `discord-commands/` and so on), for example in `scripts/`.
+The file rule still holds in a script: `@stonyx/utils/*` loads without a booted app, so use `@stonyx/utils/file` when `@stonyx/utils` is a dependency of the app, and `node:fs` only when it is not.
+
+Most other framework imports throw the same way, because they import `stonyx/log` or `stonyx/config`. The package roots of `@stonyx/orm`, `@stonyx/rest-server`, `@stonyx/discord`, `@stonyx/cron`, `@stonyx/sockets` and `@stonyx/oauth` all throw, and so do several subpaths (for example `@stonyx/cron/service`, `@stonyx/sockets/server`, `@stonyx/oauth/auth-request`). Before using an import in a script, check it the same way: `node --input-type=module -e "await import('<specifier>')"`. `@stonyx/events` and the base-class subpaths (`@stonyx/discord/base`, `@stonyx/sockets/handler`, `@stonyx/oauth/oauth-flow`) load.
+
+The reference is `test/sample/scripts/deploy-commands.js` in the `@stonyx/discord` repository (abofs/stonyx-discord, private; the file is not in the npm package). It imports `readdir` from `node:fs/promises` (it assumes `@stonyx/utils` is not an app dependency), reports with `console.log` / `console.error`, and imports only `REST` and `Routes` from `@stonyx/discord/base`. Keep such scripts out of the directories a module discovers (`requests/`, `discord-commands/` and so on), for example in `scripts/`.
+
+For a data fix on the JSON database, use `StandaloneDB` from `@stonyx/orm/standalone-db`, which reads and writes the db files without booting Stonyx. Pass the mode your app uses: `StandaloneDB` defaults to `mode: 'directory'`, while the ORM defaults to `orm.db.mode: 'file'`.
+
+```js
+import StandaloneDB from '@stonyx/orm/standalone-db';
+
+const db = new StandaloneDB({ dbPath: 'db.json', mode: 'file' });
+const animals = await db.readCollection('animals');
+// ...change records...
+await db.writeCollection('animals', animals);
+```
 
 ## Section Conventions
 

@@ -235,6 +235,8 @@ import SocketClient from '@stonyx/sockets/client';
 import Handler from '@stonyx/sockets/handler';
 ```
 
+The root, `@stonyx/sockets/server` and `@stonyx/sockets/client` throw `Stonyx has not been initialized yet` when imported outside a booted Stonyx app; `@stonyx/sockets/handler` loads anywhere. The same holds for most `@stonyx/*` package roots: see [Standalone scripts are the exception](./index.md#standalone-scripts-are-the-exception).
+
 **Reference to copy:** [`test/sample/socket-handlers/echo.ts`](https://github.com/abofs/stonyx-sockets/blob/dev/test/sample/socket-handlers/echo.ts) and [`auth.ts`](https://github.com/abofs/stonyx-sockets/blob/dev/test/sample/socket-handlers/auth.ts) in abofs/stonyx-sockets. They import `Handler` from `@stonyx/sockets/handler`, and the integration tests run against them.
 
 ## `@stonyx/discord`
@@ -269,9 +271,30 @@ import TokenManager from '@stonyx/oauth/token-manager';
 import DiscordProvider from '@stonyx/oauth/providers/discord';
 ```
 
-`@stonyx/oauth` and `@stonyx/oauth/auth-request` import `stonyx/log` (the root also `stonyx/config`), so they can only be imported inside a booted Stonyx app. Key methods of the `OAuth` singleton: `getAuthorizationUrl()`, `handleCallback()`, `getSession()`, `logout()`.
+`@stonyx/oauth` and `@stonyx/oauth/auth-request` import `stonyx/log` (the root also `stonyx/config`), so they can only be imported inside a booted Stonyx app, like most `@stonyx/*` package roots (see [Standalone scripts are the exception](./index.md#standalone-scripts-are-the-exception)). Key methods of the `OAuth` singleton: `getAuthorizationUrl()`, `handleCallback()`, `getSession()`, `logout()`.
 
 **Reference to copy:** [`test/sample/providers/mock.ts`](https://github.com/abofs/stonyx-oauth/blob/dev/test/sample/providers/mock.ts) in abofs/stonyx-oauth, a custom provider built on `@stonyx/oauth/oauth-flow`.
+
+OAuth discovers no directory. It loads one provider per key of `oauth.providers`, from that entry's `module` path, resolved against the project root. Without `module`, it looks for a built-in provider of that name inside the package (only `discord` exists), so a file in your own `providers/` directory that no config entry names is never loaded. Register a custom provider like this:
+
+```js
+// config/environment.js
+export default {
+  oauth: {
+    providers: {
+      acme: {
+        clientId: process.env.ACME_CLIENT_ID,
+        clientSecret: process.env.ACME_CLIENT_SECRET,
+        redirectUri: process.env.ACME_REDIRECT_URI,
+        scopes: ['identify'],
+        module: './providers/acme.js'
+      }
+    }
+  }
+};
+```
+
+The module's test config does the same for its sample: `oauth.providers.mock.module` is `'./test/sample/providers/mock.ts'`.
 
 ## `@abofs/code-conventions`
 

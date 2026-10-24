@@ -87,4 +87,4 @@ import config from 'stonyx/config';
 console.log(config.environment); // 'development', 'test', etc.
 ```
 
-The `stonyx/config` export is a live reference to the Stonyx instance config. It will throw if accessed before Stonyx is initialized.
+The `stonyx/config` export is the Stonyx instance config, bound once at first import. It throws at import time if Stonyx is not yet initialized, so import it only from code that loads after bootstrap.

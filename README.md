@@ -31,15 +31,15 @@ Stonyx reads `config/environment.ts` (preferred) or `config/environment.js`, ini
 
 ## Exports
 
-| Import path | What it exports |
-|-------------|-----------------|
-| `stonyx` | `Stonyx` class (default), `waitForModule(name)` |
-| `stonyx/config` | Live reference to the Stonyx config (default) |
-| `stonyx/log` | Live reference to the Chronicle logger (default) |
+| Import | Exports |
+|--------|---------|
+| `stonyx` | `Stonyx` class (default), `waitForModule(name)`; type `StoynxConfig` |
+| `stonyx/config` | The Stonyx config object (default), bound at first import |
+| `stonyx/log` | The Chronicle logger (default), bound at first import |
 | `stonyx/lifecycle` | `runStartupHooks(modules)`, `runShutdownHooks(modules)` |
 | `stonyx/test-helpers` | `setupIntegrationTests(hooks)` |
 
-`stonyx/config` and `stonyx/log` throw if read before Stonyx is initialized. See the [API Reference](docs/api.md) for details.
+`stonyx/config` and `stonyx/log` throw at import time if Stonyx is not yet initialized, so a static `import` of either fails the importing module even if the value is never read. Import them only from code that loads after bootstrap (your app code under `stonyx serve`, or a module's `init()` path). Their default export is bound once, at first import, so it does not follow an in-process reboot (see [Testing](docs/testing.md#booting-stonyx-more-than-once-in-one-process)). See the [API Reference](docs/api.md) for details.
 
 ## Documentation
 

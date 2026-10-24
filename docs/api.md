@@ -8,8 +8,8 @@ Public exports available from the `stonyx` package.
 |-------------|--------|-------------|
 | `stonyx` | `default` (Stonyx class) | Main framework class (singleton) |
 | `stonyx` | `waitForModule(name)` | Wait for an async module to be ready |
-| `stonyx/config` | `default` (config object) | Live reference to Stonyx configuration |
-| `stonyx/log` | `default` (Chronicle instance) | Live reference to Chronicle logger |
+| `stonyx/config` | `default` (config object) | Stonyx configuration, bound at first import; throws at import time before init |
+| `stonyx/log` | `default` (Chronicle instance) | Chronicle logger, bound at first import; throws at import time before init |
 | `stonyx/lifecycle` | `runStartupHooks(modules)` | Run startup hooks on a module array |
 | `stonyx/lifecycle` | `runShutdownHooks(modules)` | Run shutdown hooks in reverse order |
 | `stonyx/test-helpers` | `setupIntegrationTests(hooks)` | QUnit hook for integration test setup |

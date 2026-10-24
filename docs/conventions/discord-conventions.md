@@ -2,9 +2,9 @@
 
 Conventions for projects using `@stonyx/discord`.
 
-**Reference samples:** copy [`test/sample/discord-commands/ping.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-commands/ping.js) and [`test/sample/discord-events/log-message.js`](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-events/log-message.js) in abofs/stonyx-discord. The module's test suite loads both on every run.
+**Reference to copy:** the Quick Start in the `@stonyx/discord` README, which ships in the package (`node_modules/@stonyx/discord/README.md`). Its examples are complete files that import only from `@stonyx/discord` subpaths. The module's own samples, `test/sample/discord-commands/ping.js` and `test/sample/discord-events/log-message.js` in abofs/stonyx-discord, are written the same way, and its test suite loads both on every run. Online, with repository access: [ping.js](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-commands/ping.js), [log-message.js](https://github.com/abofs/stonyx-discord/blob/dev/test/sample/discord-events/log-message.js).
 
-`Command`, `EventHandler` and `DiscordBot` are **default exports of their own subpaths**, not named exports of the `@stonyx/discord` root. `import { Command } from '@stonyx/discord'` does not resolve. Builders and discord.js re-exports come from `@stonyx/discord/base`, so an app needs no direct `discord.js` dependency.
+`Command`, `EventHandler` and `DiscordBot` are **default exports of their own subpaths**, not named exports of the `@stonyx/discord` root. `import { Command } from '@stonyx/discord'` does not resolve. `@stonyx/discord/base` re-exports these discord.js names: `SlashCommandBuilder`, `MessageFlags`, `PermissionFlagsBits`, `GatewayIntentBits`, `AttachmentBuilder`, `Client`, `Partials`, `REST` and `Routes`. Import those from `/base`, not from `discord.js`. Any other discord.js name (for example `EmbedBuilder` or `ButtonBuilder`) is not re-exported by the current beta, so an app that uses one needs its own `discord.js` dependency; abofs/stonyx-discord#44 extends `/base` with the builders.
 
 ## Command Files
 

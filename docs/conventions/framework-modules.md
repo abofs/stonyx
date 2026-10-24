@@ -230,7 +230,7 @@ import { chunkMessage } from '@stonyx/discord/message';
 import { SlashCommandBuilder } from '@stonyx/discord/base';
 ```
 
-Reference samples: [`test/sample/`](https://github.com/abofs/stonyx-discord/tree/dev/test/sample) in abofs/stonyx-discord. See [Discord Conventions](./discord-conventions.md).
+**Reference to copy:** the Quick Start in the `@stonyx/discord` README (shipped in the package), and the samples under `test/sample/` in abofs/stonyx-discord ([online](https://github.com/abofs/stonyx-discord/tree/dev/test/sample), with repository access). See [Discord Conventions](./discord-conventions.md).
 
 ## `@stonyx/oauth`
 

@@ -2,6 +2,8 @@
 
 Scheduling conventions for `@stonyx/cron`. Covers the legacy interval API and the advanced scheduling system.
 
+**Reference to copy:** [`test/sample/payload.ts`](https://github.com/abofs/stonyx-cron/blob/dev/test/sample/payload.ts) in abofs/stonyx-cron, which defines a job of every kind below (legacy intervals, `every`, `cron`, `at`, a `systemEvent` payload, the flat AI-style input and a disabled job). The module's tests load it, and the examples below use its values. It is not in the npm package.
+
 ## Legacy API (Simple Intervals)
 
 For basic recurring callbacks, use the `Cron` class directly:
@@ -135,133 +137,6 @@ await service.add({
 //   sessionTarget: 'isolated',
 //   delivery: { mode: 'announce' },
 // }
-```
-
-## ORM Data Model
-
-When persisting cron data with `@stonyx/orm`, use the following model structure.
-
-### Models
-
-```
-models/
-  cron-job.js
-  cron-job/
-    schedule.js
-    payload.js
-    state.js
-    delivery.js
-  cron-run.js
-```
-
-**`cron-job.js`** — parent model with `belongsTo` for schedule, payload, state, and delivery sub-models (property flattening rule — no passthrough objects):
-
-```js
-import { Model, attr, belongsTo } from '@stonyx/orm';
-
-export default class CronJobModel extends Model {
-  name = attr('string');
-  description = attr('string');
-  enabled = attr('boolean');
-  deleteAfterRun = attr('boolean');
-  sessionTarget = attr('string');
-  wakeMode = attr('string');
-  createdAtMs = attr('number');
-  updatedAtMs = attr('number');
-
-  schedule = belongsTo('cron-job/schedule');
-  payload = belongsTo('cron-job/payload');
-  state = belongsTo('cron-job/state');
-  delivery = belongsTo('cron-job/delivery');
-}
-```
-
-**`cron-job/schedule.js`**
-
-```js
-import { Model, attr } from '@stonyx/orm';
-
-export default class CronJobScheduleModel extends Model {
-  kind = attr('string');
-  at = attr('string');
-  everyMs = attr('number');
-  anchorMs = attr('number');
-  expr = attr('string');
-  tz = attr('string');
-}
-```
-
-**`cron-job/payload.js`**
-
-```js
-import { Model, attr } from '@stonyx/orm';
-
-export default class CronJobPayloadModel extends Model {
-  kind = attr('string');
-  message = attr('string');
-  text = attr('string');
-}
-```
-
-**`cron-job/state.js`**
-
-```js
-import { Model, attr } from '@stonyx/orm';
-
-export default class CronJobStateModel extends Model {
-  nextRunAtMs = attr('number');
-  runningAtMs = attr('number');
-  lastRunAtMs = attr('number');
-  lastStatus = attr('string');
-  lastError = attr('string');
-  lastDurationMs = attr('number');
-  consecutiveErrors = attr('number');
-  scheduleErrorCount = attr('number');
-}
-```
-
-**`cron-job/delivery.js`**
-
-```js
-import { Model, attr } from '@stonyx/orm';
-
-export default class CronJobDeliveryModel extends Model {
-  mode = attr('string');
-}
-```
-
-**`cron-run.js`**
-
-```js
-import { Model, attr } from '@stonyx/orm';
-
-export default class CronRunModel extends Model {
-  jobId = attr('string');
-  status = attr('string');
-  error = attr('string');
-  summary = attr('string');
-  runAtMs = attr('number');
-  durationMs = attr('number');
-  nextRunAtMs = attr('number');
-  ts = attr('number');
-}
-```
-
-**Property ordering:** `attr()` → `belongsTo()` (on parent model).
-
-### DB Schema
-
-```js
-import { Model, hasMany } from '@stonyx/orm';
-
-export default class DBModel extends Model {
-  cronJobs = hasMany('cron-job');
-  cronJobSchedules = hasMany('cron-job/schedule');
-  cronJobPayloads = hasMany('cron-job/payload');
-  cronJobStates = hasMany('cron-job/state');
-  cronJobDeliveries = hasMany('cron-job/delivery');
-  cronRuns = hasMany('cron-run');
-}
 ```
 
 ## Configuration

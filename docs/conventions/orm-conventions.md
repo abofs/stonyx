@@ -1,5 +1,7 @@
 # ORM Conventions
 
+**Reference to copy:** `test/sample/` in [abofs/stonyx-orm](https://github.com/abofs/stonyx-orm/tree/dev/test/sample): [`models/animal.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/models/animal.ts), [`serializers/animal.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/serializers/animal.ts), [`transforms/animal.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/transforms/animal.ts), [`views/`](https://github.com/abofs/stonyx-orm/tree/dev/test/sample/views) and [`db-schema.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/db-schema.ts). The ORM's test config discovers them from there, and the code blocks below are copied from them. For access control, see [Access Control](#access-control), which names its own reference. The samples are not in the npm package.
+
 ## Models
 
 Models define the data structure with attributes and relationships. One model per file in `models/`.
@@ -186,7 +188,7 @@ export default class AnimalModel extends Model {
 
 ## Transforms
 
-Transforms are default-exported functions (not classes) that convert values. One transform per model in `transforms/`.
+Transforms are default-exported functions (not classes) that convert values, one per file in `transforms/`. The file name is the attribute type: `transforms/animal.js` is applied to every `attr('animal')`, such as the `type` attribute of the model above. A transform is not tied to a model of the same name.
 
 ```js
 import { ANIMALS } from '../constants.js';
@@ -200,9 +202,33 @@ export default function(value) {
 }
 ```
 
+## Views
+
+Views are read-only, model-like classes that compute derived data (counts, averages, groupings) from a source model. One view per file in `views/` (config `orm.paths.view`). Each extends `View` from `@stonyx/orm`, sets `static source` to the model it reads, and declares its fields with `attr()`, `belongsTo()` and the aggregate helpers `count`, `avg`, `sum`, `min` and `max`. The store key is the file name (`views/owner-animal-count.js` is `'owner-animal-count'`). Views cannot be created, updated or removed. From `views/owner-animal-count.ts`:
+
+```js
+import { View, attr, belongsTo, count } from '@stonyx/orm';
+
+export default class OwnerAnimalCountView extends View {
+  static source = 'owner';
+
+  id = attr('string');
+  animalCount = count('pets');
+  owner = belongsTo('owner');
+}
+```
+
+`views/animal-count-by-size.ts` shows `static groupBy`. The full reference is the ORM's [`docs/views.md`](https://github.com/abofs/stonyx-orm/blob/dev/docs/views.md).
+
 ## Hooks
 
-Use `beforeHook` / `afterHook` from `@stonyx/orm/hooks`. Place hook files in `hooks/`.
+Register hooks by **calling** `beforeHook(operation, model, handler)` / `afterHook(operation, model, handler)`. Both are exported from `@stonyx/orm` and from `@stonyx/orm/hooks`, and each returns a function that unregisters the hook.
+
+```js
+import { beforeHook, afterHook } from '@stonyx/orm';
+```
+
+Nothing discovers hook files: the ORM does not load a `hooks/` directory, so a file there runs only if your code imports it. Make the calls from code that runs at startup, such as `app.js`, or from a module it imports. The hook API, the context object and examples are in the [Lifecycle Hooks](https://github.com/abofs/stonyx-orm/blob/dev/README.md#lifecycle-hooks) section of the ORM README.
 
 ## DB Schema
 
@@ -220,7 +246,7 @@ export default class DBModel extends Model {
 }
 ```
 
-Located at `config/db-schema.js`, referenced from `config/environment.js`.
+Located at `config/db-schema.js`, referenced from `config/environment.js` (`orm.db.schema`). The property names are plural; the names passed to `hasMany` are the singular model names.
 
 ## Store
 
@@ -231,11 +257,12 @@ import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
 
 // Read — sync, from memory only. With a database adapter, requires static memory = true
 // on the model (the default is false); in JSON file mode every record is in memory
+// Keys are the singular model name (the model's file name), never the plural
 const record = store.get('animal', 1);
-const allAnimals = store.data.get('animals');
+const allAnimals = store.get('animal'); // Map of id → record
 
 // Read — async, queries DB if memory: false
-const record = await store.find('animal', 1);
+const found = await store.find('animal', 1);
 const all = await store.findAll('animal');
 
 // Create — adds to store and returns the record

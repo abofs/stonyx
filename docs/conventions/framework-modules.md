@@ -105,7 +105,7 @@ TS-migration PRs in `@stonyx/*` modules **must** skip `config/environment.*` —
 
 ## Module README, sample and type conventions
 
-These apply to every `@stonyx/*` module repo. They were settled across the Sprint 95 README and sample work, by majority of the module READMEs on their `dev` branches (measured 2026-10-24) where the READMEs differed.
+These apply to every `@stonyx/*` module repo. Where the module READMEs differed, the majority form on their `dev` branches (measured 2026-10-24) was chosen.
 
 **Sample pointer: a `## Samples` section.** It links `test/sample/` on GitHub, says the samples are not in the npm package, and names the tests that run them. Where a module answers common questions, it adds a **How do I… / Sample** table, as stonyx-rest-server does. Six READMEs use this heading (cron, discord, oauth, orm, rest-server, sockets); events and utils use `## Canonical usage`.
 
@@ -117,7 +117,7 @@ These apply to every `@stonyx/*` module repo. They were settled across the Sprin
 | `@stonyx/<name>` | `<Name>` (default), ... |
 ```
 
-Say what is a default export and what is named, as the cron, orm and rest-server READMEs do. Those three use exactly this header. The others differed: `Import | Provides` (discord), `Import | Exports` (oauth, and stonyx core before this change), `Import path | Exports` (utils), `Import | Export` under `## Entry points` (logs), and a bullet list (sockets). `Import path` is the first column in 4 of the 7 module tables, and `What it exports` the second column most often used (3 tables).
+Say what is a default export and what is named, as the cron, orm and rest-server READMEs do. Those three use exactly this header. The others differed: `Import | Provides` (discord), `Import | Exports` (oauth, and stonyx core before this change), `Import path | Exports` (utils), `Import | Export` under `## Entry points` (logs), a bullet list (sockets), and no exports section at all (events). `Import path` is the first column in 4 of the 7 module tables, and `What it exports` the second column most often used (3 tables).
 
 **`@types/*` goes in `dependencies` when the published types need it.** If a module's emitted `.d.ts` files import types from another package, that package's `@types/*` is a `dependency`, not a `devDependency`, or TypeScript consumers get implicit-`any` errors. stonyx-rest-server's `dist/*.d.ts` import from `express`, so `@types/express` moved to `dependencies` in abofs/stonyx-rest-server#81, which measured it: a fresh strict consumer type-checking the copied samples got 6 errors (`TS7006`) before the move and none after. To find a module's candidates, build it and list the bare specifiers its `dist/*.d.ts` import.
 

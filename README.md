@@ -13,11 +13,13 @@
 ## Quick Start
 
 ```bash
-npm install -g stonyx
+npm install -g stonyx@beta
 stonyx new my-app
 cd my-app
 stonyx serve
 ```
+
+Install from the `beta` channel: npm's `latest` tag still points at `0.2.2`, which predates the CLI (no `stonyx` binary, and its postinstall fails), and promoting a stable release is pending a release decision (abofs/stonyx#123). See [Why not `latest`](docs/modules.md#why-not-latest).
 
 The `new` command walks you through module selection and generates a ready-to-run project. From there, the CLI handles bootstrapping:
 

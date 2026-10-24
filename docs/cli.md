@@ -2,6 +2,14 @@
 
 Stonyx includes a CLI that handles bootstrapping, module initialization, and application execution.
 
+## Installation
+
+```bash
+npm install -g stonyx@beta
+```
+
+Install from the `beta` channel, not `latest`: see [Why not `latest`](modules.md#why-not-latest) (abofs/stonyx#123).
+
 ## Usage
 
 ```bash

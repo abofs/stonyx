@@ -57,6 +57,16 @@ core's release line, so the whole set stays on one line:
 
 ### Why not `latest`
 
+Re-measured 2026-10-24 (abofs/stonyx#123): `latest` is still `0.2.2` and `beta` is
+`0.2.3-beta.101`. Installing the untagged package in an empty project now fails outright:
+npm exits 1 because `0.2.2`'s postinstall imports `@stonyx/utils`, which `0.2.2` does not
+declare (`ERR_MODULE_NOT_FOUND`), and no `node_modules/.bin/stonyx` is created; the same
+install at `@beta` exits 0 with the binary. The module `latest` pins are unchanged:
+`@stonyx/orm@0.3.1` → `0.2.3-beta.11`, `@stonyx/sockets@0.1.0` and
+`@stonyx/discord@0.1.0` → `0.2.3-beta.6`, `@stonyx/cron@0.2.0` and
+`@stonyx/rest-server@0.2.0` → `^0.2.2`, `@stonyx/oauth@0.1.0` → `^0.2.0`. Install from
+`beta` until a stable core *and* the module promotions it needs are released.
+
 Measured 2026-09-05:
 
 - `stonyx@latest` is `0.2.2` while `stonyx@beta` is `0.2.3-beta.96`. `0.2.2` ships no

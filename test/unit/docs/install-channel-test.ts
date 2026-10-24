@@ -8,9 +8,18 @@ const { module, test } = QUnit;
  * abofs/stonyx#123: the untagged `stonyx` package resolves the `latest` dist-tag,
  * which is `0.2.2` — no `bin`, and a postinstall that fails with
  * ERR_MODULE_NOT_FOUND. Until a stable release is promoted, every install command
- * the docs hand a reader must name a channel that works (`@beta`) or an exact
- * version. This guards README.md and docs/**.md: fenced code blocks and inline
- * code spans alike, since a reader copies either.
+ * the docs hand a reader must name the `@beta` channel. This guards README.md and
+ * docs/**.md: fenced code blocks, inline code spans and `<code>` spans alike, since
+ * a reader copies any of them.
+ *
+ * Why `@beta` only, and not "or an exact version": measured 2026-10-24 from the
+ * registry packument, no stable `stonyx` release ships a `bin` (0.0.3–0.0.7, 0.1.0,
+ * 0.2.0, 0.2.1, 0.2.2 — all of them), and the first version that does is
+ * `0.2.3-beta.1`. An exact-version escape therefore admitted the broken release
+ * itself (`stonyx@0.2.2`). Module stable lines are no safer: `@stonyx/cron@0.2.0` and
+ * `@stonyx/rest-server@0.2.0` depend on core `^0.2.2`, which resolves `0.2.2`. A floor
+ * per package would have to be kept in step with the registry; `@beta` needs none.
+ * Revisit when abofs/stonyx#123 promotes a stable release.
  */
 
 const repoRoot = process.cwd();
@@ -22,12 +31,13 @@ interface InstallSpec {
   spec: string;
 }
 
-// `npm i|install|add`, `pnpm add|i|install`, `yarn [global] add` take any number of
-// package specs; `npx` and `pnpm dlx` take one (the first non-flag token), then args.
-const MULTI_SPEC = /^(?:npm\s+(?:i|install|add)|pnpm\s+(?:add|i|install)|yarn\s+(?:global\s+)?add)(?=\s|$)(.*)$/;
-const SINGLE_SPEC = /^(?:npx|pnpm\s+dlx)(?=\s|$)(.*)$/;
+// Leading flags are allowed between the binary and its subcommand (`npm -g install`).
+const FLAGS = String.raw`(?:\s+-\S+)*\s+`;
+// These take any number of package specs.
+const MULTI_SPEC = new RegExp(String.raw`^(?:npm${FLAGS}(?:i|install|add)|pnpm${FLAGS}(?:add|i|install)|yarn${FLAGS}(?:global\s+)?add|bun${FLAGS}(?:add|i|install))(?=\s|$)(.*)$`);
+// These take one package (the first non-flag token), then arguments for it.
+const SINGLE_SPEC = new RegExp(String.raw`^(?:npx|bunx|pnpm${FLAGS}dlx|yarn${FLAGS}dlx|npm${FLAGS}(?:exec|x))(?=\s|$)(.*)$`);
 const STONYX_NAME = /^(stonyx|@stonyx\/[^@\s]+)(?:@(.*))?$/;
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /** Package specs naming the core or a `@stonyx/*` module, from one shell line. */
 function specsInCommandLine(rawLine: string): { command: string; spec: string }[] {
@@ -39,8 +49,12 @@ function specsInCommandLine(rawLine: string): { command: string; spec: string }[
     const single = multi ? null : SINGLE_SPEC.exec(command);
     const rest = (multi ?? single)?.[1];
     if (rest === undefined) continue;
-    let tokens = rest.trim().split(/\s+/).filter((t) => t && !t.startsWith('-'));
-    if (single) tokens = tokens.slice(0, 1);
+    const words = rest.trim().split(/\s+/).map((t) => t.replace(/^(--package=)?(['"])(.*)\2$/, '$1$3'));
+    let tokens = words.filter((t) => t && !t.startsWith('-'));
+    const packageFlags = words.filter((t) => t.startsWith('--package=')).map((t) => t.slice('--package='.length));
+    // With `--package=`, a single-spec command's positional is the bin to run, not a package.
+    if (single) tokens = packageFlags.length ? packageFlags : tokens.slice(0, 1);
+    else tokens.push(...packageFlags);
     for (const token of tokens) {
       if (STONYX_NAME.test(token)) found.push({ command, spec: token });
     }
@@ -52,26 +66,39 @@ function specsInCommandLine(rawLine: string): { command: string; spec: string }[
 function extractInstallSpecs(markdown: string, file: string): InstallSpec[] {
   const specs: InstallSpec[] = [];
   let inFence = false;
+  let pending = '';
+  let pendingLine = 0;
   markdown.split(/\r?\n/).forEach((text, index) => {
     const line = index + 1;
     if (/^\s*(```|~~~)/.test(text)) {
       inFence = !inFence;
+      pending = '';
       return;
     }
-    const candidates = inFence ? [text] : [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    if (inFence && /\\$/.test(text)) {
+      // Backslash continuation: join with the next line, report the first line.
+      if (!pending) pendingLine = line;
+      pending += text.replace(/\\$/, ' ');
+      return;
+    }
+    const joined = pending + text;
+    const reportedLine = pending ? pendingLine : line;
+    pending = '';
+    const candidates = inFence
+      ? [joined]
+      : [...joined.matchAll(/`([^`]+)`|<code>([^<]+)<\/code>/g)].map((m) => m[1] ?? m[2]);
     for (const candidate of candidates) {
       for (const { command, spec } of specsInCommandLine(candidate)) {
-        specs.push({ file, line, command, spec });
+        specs.push({ file, line: reportedLine, command, spec });
       }
     }
   });
   return specs;
 }
 
-/** True when the spec pins the `beta` channel or an exact version. */
-function namesBetaOrExact(spec: string): boolean {
-  const version = STONYX_NAME.exec(spec)?.[2];
-  return version === 'beta' || (version !== undefined && EXACT_VERSION.test(version));
+/** True when the spec names the `beta` dist-tag. See the header for why nothing else passes. */
+function namesBeta(spec: string): boolean {
+  return STONYX_NAME.exec(spec)?.[2] === 'beta';
 }
 
 function markdownFiles(dir: string): string[] {
@@ -83,7 +110,7 @@ function markdownFiles(dir: string): string[] {
 }
 
 module('[Unit] Docs install channel (abofs/stonyx#123)', function() {
-  test('the extractor flags untagged, latest and range specs and passes @beta and exact versions', function(assert) {
+  test('the extractor finds install commands in every shape, and only @beta passes', function(assert) {
     const doc = [
       'Install it with `npm install -g stonyx` first.',
       '```bash',
@@ -98,11 +125,25 @@ module('[Unit] Docs install channel (abofs/stonyx#123)', function() {
       'pnpm dlx stonyx@beta new my-app',
       'pnpm install',
       'stonyx serve    # Bootstrap + run app.ts',
+      'npm install -g stonyx@0.2.2',
+      'npm install -g stonyx@0.2.3-beta.101',
+      'npm -g install stonyx',
+      'pnpm -g add stonyx@beta',
+      'npm exec stonyx new my-app',
+      'npm exec --package=stonyx@beta -- stonyx new my-app',
+      'npm x stonyx new my-app',
+      'bunx stonyx new my-app',
+      'bun add stonyx',
+      'npm install -g "stonyx"',
+      "npm install -g 'stonyx@beta'",
+      'npm install -g \\',
+      '  stonyx',
+      'stonyx new my-app',
       '```',
-      'Then `cd <name> && pnpm install` resumes it.',
+      'Then `cd <name> && pnpm install` resumes it, or <code>npm i -g stonyx</code> it.',
     ].join('\n');
 
-    const verdicts = extractInstallSpecs(doc, 'fixture.md').map((s) => [s.line, s.spec, namesBetaOrExact(s.spec)]);
+    const verdicts = extractInstallSpecs(doc, 'fixture.md').map((s) => [s.line, s.spec, namesBeta(s.spec)]);
 
     assert.deepEqual(verdicts, [
       [1, 'stonyx', false],
@@ -111,15 +152,30 @@ module('[Unit] Docs install channel (abofs/stonyx#123)', function() {
       [5, 'stonyx@latest', false],
       [6, 'stonyx@^0.2.3', false],
       [6, '@stonyx/orm', false],
-      [7, '@stonyx/orm@0.3.2-beta.249', true],
+      [7, '@stonyx/orm@0.3.2-beta.249', false],
       [8, 'stonyx', false],
       [9, 'stonyx@beta', true],
       [10, 'stonyx', false],
       [11, 'stonyx@beta', true],
-    ], 'install commands in fences and inline code are found; bare `pnpm install` and non-install lines are not');
+      // The broken `latest` release itself, pinned exactly: red.
+      [14, 'stonyx@0.2.2', false],
+      // A working exact pin is red too: the rule is `@beta` only (see header).
+      [15, 'stonyx@0.2.3-beta.101', false],
+      [16, 'stonyx', false],
+      [17, 'stonyx@beta', true],
+      [18, 'stonyx', false],
+      [19, 'stonyx@beta', true],
+      [20, 'stonyx', false],
+      [21, 'stonyx', false],
+      [22, 'stonyx', false],
+      [23, 'stonyx', false],
+      [24, 'stonyx@beta', true],
+      [25, 'stonyx', false],
+      [29, 'stonyx', false],
+    ], 'install commands in fences, inline code and <code> are found, across flags-first, exec, bun, quotes and continuations; bare `pnpm install` and non-install lines are not');
   });
 
-  test('every stonyx install command in README.md and docs/ names @beta or an exact version', function(assert) {
+  test('every stonyx install command in README.md and docs/ names @beta', function(assert) {
     const files = [resolve(repoRoot, 'README.md'), ...markdownFiles(resolve(repoRoot, 'docs'))];
     const specs = files.flatMap((path) => extractInstallSpecs(readFileSync(path, 'utf8'), relative(repoRoot, path)));
 
@@ -128,8 +184,8 @@ module('[Unit] Docs install channel (abofs/stonyx#123)', function() {
     assert.ok(specs.some((s) => s.file === 'README.md'), 'README.md contains at least one stonyx install command');
 
     const offenders = specs
-      .filter((s) => !namesBetaOrExact(s.spec))
-      .map((s) => `${s.file}:${s.line}: \`${s.command}\` installs \`${s.spec}\`, which resolves npm \`latest\``);
-    assert.deepEqual(offenders, [], 'no install command resolves the untagged/latest channel');
+      .filter((s) => !namesBeta(s.spec))
+      .map((s) => `${s.file}:${s.line}: \`${s.command}\` installs \`${s.spec}\`, not the \`beta\` channel`);
+    assert.deepEqual(offenders, [], 'every install command names @beta');
   });
 });

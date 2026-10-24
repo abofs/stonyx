@@ -2,6 +2,16 @@
 
 Universal rules that apply to every Stonyx project. Section-specific conventions are linked below.
 
+## Before you report a gap or bug
+
+Each module's `test/sample/` is its canonical usage reference: the module's own test suite loads and runs those files, so they show what works. Before you report that a module is missing something, or that it is broken:
+
+1. **Check whether it is a known pattern.** Read the module's **How do I…** and **Not a gap, by design** sections ([REST](./rest-conventions.md#how-do-i), [ORM](./orm-conventions.md#how-do-i), [Discord](./discord-conventions.md#how-do-i), [Cron](./cron-conventions.md#how-do-i)), and its `test/sample/` directory ([Testing Conventions](./testing-conventions.md#sample--fixture-files) lists them). An absent feature listed there has an intended pattern.
+2. **Reproduce it against the module's own sample, with idiomatic, documented usage.** Start from a sample file in a clone of the module's `dev` branch, change only what shows the problem, and run it with the module's `pnpm test` (best: as a failing test). Import only what the package exports and the docs show: no `src/` or `dist/` paths, no undocumented properties.
+3. **Cite the sample and the repro in the report:** the sample path (`abofs/<module>/test/sample/...`) and commit, the minimal change or failing test, the command you ran, and the expected and actual output.
+
+A report that cannot be reproduced this way is a usage question, not a bug. Ask it as one, with what you tried.
+
 ## Universal Rules
 
 - **One class per file** — each file exports a single default class (or function for transforms)

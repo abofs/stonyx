@@ -103,6 +103,26 @@ TS-migration PRs in `@stonyx/*` modules **must** skip `config/environment.*` —
 >
 > Both are guarded by `test/unit/modules-test.ts` ("a module shipping config/environment.ts throws a DIFFERENT, causal error from one with no config") and `test/unit/module-load-failure-test.ts`.
 
+## Module README, sample and type conventions
+
+These apply to every `@stonyx/*` module repo. They were settled across the Sprint 95 README and sample work, by majority of the module READMEs on their `dev` branches (measured 2026-10-24) where the READMEs differed.
+
+**Sample pointer: a `## Samples` section.** It links `test/sample/` on GitHub, says the samples are not in the npm package, and names the tests that run them. Where a module answers common questions, it adds a **How do I… / Sample** table, as stonyx-rest-server does. Six READMEs use this heading (cron, discord, oauth, orm, rest-server, sockets); events and utils use `## Canonical usage`.
+
+**Exports: a `## Exports` table** with one row per `package.json#exports` key, in this form:
+
+```md
+| Import path | What it exports |
+| :--- | :--- |
+| `@stonyx/<name>` | `<Name>` (default), ... |
+```
+
+Say what is a default export and what is named, as the cron, orm and rest-server READMEs do. Those three use exactly this header. The others differed: `Import | Provides` (discord), `Import | Exports` (oauth, and stonyx core before this change), `Import path | Exports` (utils), `Import | Export` under `## Entry points` (logs), and a bullet list (sockets). `Import path` is the first column in 4 of the 7 module tables, and `What it exports` the second column most often used (3 tables).
+
+**`@types/*` goes in `dependencies` when the published types need it.** If a module's emitted `.d.ts` files import types from another package, that package's `@types/*` is a `dependency`, not a `devDependency`, or TypeScript consumers get implicit-`any` errors. stonyx-rest-server's `dist/*.d.ts` import from `express`, so `@types/express` moved to `dependencies` in abofs/stonyx-rest-server#81, which measured it: a fresh strict consumer type-checking the copied samples got 6 errors (`TS7006`) before the move and none after. To find a module's candidates, build it and list the bare specifiers its `dist/*.d.ts` import.
+
+**The sample-surface guard from `@stonyx/events` is the standard test for `test/sample/`.** [`test/unit/sample-surface-test.ts`](https://github.com/abofs/stonyx-events/blob/dev/test/unit/sample-surface-test.ts) (abofs/stonyx-events#29) fails when an `exports` subpath stops resolving to the built entry, when a runtime export is imported by no sample, when a sample is imported by no `*-test.ts`, or when a sample imports something a consumer cannot write (an unexported subpath, or a relative path out of `test/sample/`). It reads the package from the working directory, so it is copied unchanged: stonyx-utils carries a byte-identical copy (`cmp` exit 0). It collects `.ts` sample files only, so a module with `.js` samples (stonyx-discord) has to widen that filter when it adopts the guard. The narrower `test/unit/sample-imports-test.ts` in stonyx-discord, stonyx-oauth and stonyx-rest-server checks only the last of the four.
+
 ## `stonyx/log`
 
 All logging goes through `stonyx/log` (see universal rules in [conventions index](./index.md)).

@@ -99,8 +99,16 @@ function pack(workDir: string): Packed {
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as PackageJson;
 
   // Make exactly the tarball's `dependencies` resolvable next to the extracted package,
-  // linked to the copies installed for this repo. Nothing else is on the resolution path:
-  // workDir is under the OS temp dir, not the repo.
+  // linked to the copies installed for this repo. For stonyx's own imports nothing else is
+  // on the resolution path: workDir is under the OS temp dir, not the repo.
+  // Limits, both left to other checks:
+  //   - The links point at the realpaths in this repo's pnpm store, so a dependency's *own*
+  //     imports resolve from the repo's tree (its `.pnpm/node_modules` hoist and the repo's
+  //     `node_modules`, devDependencies included). A dependency that imports something it
+  //     does not declare passes here and fails `npm i`. Isolating that needs the full
+  //     dependency closure, i.e. an install, which this guard does not run.
+  //   - The installed version is tested, not the declared one. A `dependencies` version
+  //     the registry does not serve passes here; CI's frozen-lockfile install fails on it.
   for (const name of Object.keys(pkg.dependencies ?? {})) {
     const installed = join(repoRoot, 'node_modules', name);
     if (!existsSync(installed)) continue; // left unresolvable: the postinstall run reports it

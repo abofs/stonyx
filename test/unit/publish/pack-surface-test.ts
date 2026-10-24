@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, posix } from 'node:path';
+import { basename, delimiter, dirname, join, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const { module, test } = QUnit;
@@ -118,11 +118,21 @@ function pack(workDir: string): Packed {
  * package's package.json. Every `npm_*` / `pnpm_*` variable of the runner (`pnpm test`
  * sets `npm_package_json` to this repo's package.json and `npm_lifecycle_event` to
  * `test`) is dropped first, so a postinstall that reads them sees the tarball, not the repo.
+ * Likewise every `node_modules/.bin` entry on PATH (`pnpm test` puts this repo's first, which
+ * would let the postinstall exec a devDependency's bin) is replaced by the ones npm prepends
+ * for the installed package.
  */
 function installEnv(packed: Packed, consumerDir: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^(npm|pnpm)_/i.test(key) && key !== 'NODE_PATH'),
   );
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+  const systemPath = (env[pathKey] ?? '').split(delimiter).filter((dir) => dir && !/node_modules[\\/]\.bin[\\/]?$/.test(dir));
+  env[pathKey] = [
+    join(packed.pkgDir, 'node_modules', '.bin'),
+    join(packed.workDir, 'node_modules', '.bin'),
+    ...systemPath,
+  ].join(delimiter);
   return Object.assign(env, {
     INIT_CWD: consumerDir,
     PWD: packed.pkgDir,

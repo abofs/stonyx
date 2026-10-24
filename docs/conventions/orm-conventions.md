@@ -316,3 +316,33 @@ await Orm.db.save();
 **When to use `Orm.db.save()`**: The `autosave: 'onUpdate'` config only triggers on REST POST/PATCH/DELETE. When modifying data directly via `createRecord` / `updateRecord` in app code (not through REST), call `Orm.db.save()` explicitly to persist.
 
 **Store vs REST**: Use `store` for internal app logic (session tracking, state management). Use REST request handlers for external API consumers. Both operate on the same in-memory data.
+
+## How do I…
+
+Each answer names the file that shows it in abofs/stonyx-orm. The access examples are the README's, which `pnpm test:readme` runs against a live server ([`test/integration/readme-access/`](https://github.com/abofs/stonyx-orm/blob/dev/test/integration/readme-access/setup.ts)).
+
+**Deny access to one record?** In the model's access class, guard with `if (!('recordId' in request)) return false;`, then compare `request.recordId` (never the URL) and return `false` to deny. Return the allowed operations for everything else. Reference: `OwnerAccess` in the README's [REST Server Integration](https://github.com/abofs/stonyx-orm/blob/dev/README.md#rest-server-integration) section, copied in [Access Control](#access-control) above.
+
+**Filter records out of a collection response?** Return a function only when `request.recordId === undefined` (the collection route), and only where every method on that route may proceed. Compare a relationship by its id: `record.owner?.id`. Reference: `OwnerAccess` in the README; the `owner?.id` filter in [`access/global-access.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/access/global-access.ts) (a fixture: copy that line, not its shape).
+
+**Keep a record private on every route that can reach it?** Give every model that relates to it its own access class. On record and relationship routes, look the record up with `store.get` and return `false`, and declare `static memory = true` on each model the rule reads. Reference: `PrivateAnimalAccess` in [A deny is not a record boundary](#a-deny-is-not-a-record-boundary).
+
+**Read records synchronously (in `access()`, say)?** `store.get(model, id)`, keyed by the singular model name. With a database adapter, only models declaring `static memory = true` are in memory. Otherwise use `await store.find(...)` outside `access()`. Reference: [Store](#store) above and the ORM's [`docs/internals.md`](https://github.com/abofs/stonyx-orm/blob/dev/docs/internals.md#store-reads-and-the-memory-flag).
+
+**Run a hook in the app and in my tests?** Export `registerHooks()` from one module, call it from `app.js`, and in tests call it in `beforeEach` with `clearAllHooks()` in `afterEach`. Reference: [Hooks](#hooks) above and the README's [Testing Hooks](https://github.com/abofs/stonyx-orm/blob/dev/README.md#testing-hooks).
+
+**Compute counts or averages over a model?** A view in `views/`. Samples: [`views/owner-animal-count.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/views/owner-animal-count.ts) and, with `static groupBy`, [`views/animal-count-by-size.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/views/animal-count-by-size.ts).
+
+**Map external data onto a model, or convert an attribute's values?** A serializer's `map` for structure, a transform named after the attribute type for values. Samples: [`serializers/animal.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/serializers/animal.ts) and [`transforms/animal.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/sample/transforms/animal.ts).
+
+**Fix data in the JSON database from a script?** `StandaloneDB` from `@stonyx/orm/standalone-db`, with the app stopped. Reference: [Standalone scripts are the exception](./index.md#standalone-scripts-are-the-exception) and [`test/unit/standalone-db-test.ts`](https://github.com/abofs/stonyx-orm/blob/dev/test/unit/standalone-db-test.ts).
+
+## Not a gap, by design
+
+These are absent on purpose, and each trap below was measured against a running server while these docs were written (abofs/stonyx#127, #128). Each has an intended pattern, so a report that one is missing is a usage question (see [Before you report a gap or bug](./index.md#before-you-report-a-gap-or-bug)).
+
+- **A returned filter function filters only the `GET` collection.** It filters the primary records of a collection response and nothing else, and on every route it authorizes the whole request, writes included: `POST` to the collection, and any record, relationship or `?include=` route where the class returns it. Return a function only on the collection route, and deny record routes explicitly.
+- **A deny is not a record boundary.** Relationship routes and `?include=` are authorized only by the access class of the route's source model. A deny in `OwnerAccess` does not stop `GET /animals/1/owner` from serving the owner it denies. Give every model that can reach the record its own rule (see [A deny is not a record boundary](#a-deny-is-not-a-record-boundary)).
+- **No authorization on the URL.** There is no helper for matching paths, because `url`, `originalUrl` and `baseUrl` do not identify a record reliably. Authorize on `request.recordId`.
+- **`access()` is synchronous, and `store.get` reads only memory.** With a database adapter (MySQL, Postgres, TimescaleDB, DynamoDB), a model's records are in memory only with `static memory = true`; the default is `false`. Without it, `store.get` returns `undefined` and a lookup-based deny allows every route.
+- **No `hooks/` directory.** Nothing discovers hook files. Hooks exist once `beforeHook` / `afterHook` is called, and `stonyx test` never imports `app.js`, so tests call `registerHooks()` themselves (see [Hooks](#hooks)).

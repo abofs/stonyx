@@ -90,7 +90,9 @@ Clients handle I/O; serializers handle structure. Never mix the two.
 
 Access classes define which models they govern and implement an `access()` method. They live in `access/`.
 
-**Reference to copy:** [`test/sample/access/`](https://github.com/abofs/stonyx-orm/tree/dev/test/sample/access) in abofs/stonyx-orm, together with the [REST Server Integration](https://github.com/abofs/stonyx-orm/blob/dev/README.md#rest-server-integration) section of its README. The README's access examples are extracted and run against a live server on every CI run (`test/integration/readme-access/`).
+**Reference to copy:** the `OwnerAccess` and `AnimalAccess` examples in the "REST Server Integration" section of the `@stonyx/orm` README. The README ships in the package (`node_modules/@stonyx/orm/README.md`), and abofs/stonyx-orm's `pnpm test:readme` extracts those examples and runs them against a live server on every CI run (`test/integration/readme-access/`). Online: [REST Server Integration](https://github.com/abofs/stonyx-orm/blob/dev/README.md#rest-server-integration).
+
+The repo's `test/sample/access/global-access.ts` is a test fixture that demonstrates a deny, a collection filter and the `owner?.id` filter together. Do not copy its shape: it derives the model from `request.baseUrl`, which the rules below advise against, and it has no `'recordId' in request` guard. Read its "Intentional Gap" note, which applies to the classes below as well (see [A deny is not a record boundary](#a-deny-is-not-a-record-boundary)).
 
 **Structure:** `models` property → `access()` method. Prefer one class per model when the rules are model-specific: `access()` receives only the request, and the request does not name the model.
 
@@ -139,7 +141,7 @@ export default class AnimalAccess {
 }
 ```
 
-**Authorize on `request.recordId`, never on the URL.** `request.url` is relative to the mount point (`/angela`, not `/owners/angela`), so a suffix match against it never fires. `request.originalUrl` and `request.baseUrl` are the raw text the client sent, so query strings, trailing slashes, casing and percent-encoding all change them while addressing the same record. `request.recordId` is computed by the same function the record lookup uses, so the two cannot disagree. It is `undefined` on collection routes. For a numeric-id model it is a number, so compare it against a number.
+**Authorize on `request.recordId`, never on the URL.** `request.url` is relative to the mount point (`/angela`, not `/owners/angela`), so a suffix match against it never fires. `request.originalUrl` is the raw text the client sent, so query strings, trailing slashes, casing and percent-encoding all change it while addressing the same record. `request.baseUrl` is the mount as the client spelled it, so casing changes it (`/OwNeRs` reaches the `owners` routes with `baseUrl` `/OwNeRs`). `request.recordId` is computed by the same function the record lookup uses, so the two cannot disagree. It is `undefined` on collection routes. For a numeric-id model it is a number, so compare it against a number.
 
 **Filter on a relationship's id.** Inside a filter function, a `belongsTo` property is the related Record, not its id. `record.owner !== 'angela'` compares a Record with a string, so it is always true and filters nothing. Use `record.owner?.id`.
 
@@ -149,6 +151,17 @@ The `models` property accepts an array of model names, or `'*'` to match all mod
 - `false` (or any falsy value): deny the request with 403
 - `string[]`: the allowed operations (`'read'`, `'create'`, `'update'`, `'delete'`). A request whose operation is not listed gets 403
 - `function`: **authorizes the whole request, writes included**. The operations list is not consulted, so returning a filter for a collection route also permits `POST` to it. The function is then applied as a filter to the response records. Return a function only where every method on that route may proceed
+
+### A deny is not a record boundary
+
+**These two classes do not make angela's data private.** A `false` or a filter in one model's access class protects a record only on that model's own routes. Relationship routes (`/:id/<relationship>`, `/:id/relationships/<relationship>`) and `?include=` are authorized only by the access class of the route's *source* model; the related model's class is never consulted. With the two classes above, `/owners/angela` is refused, but:
+
+- `GET /animals/1/owner`, `GET /animals/1/relationships/owner` and `GET /animals/1?include=owner` serve her owner record (200), because `AnimalAccess` authorizes them.
+- Her animals are open by id: `GET /animals/1` returns 200, `PATCH /animals/7` returns 200 and `DELETE /animals/7` returns 204.
+
+The sample fixture carries the same warning: "Intentional Gap: this denies only /owners/angela and filters angela out of /owners. Her data is still served on related routes: her animals by id (/animals/1), her full owner record via an animal (/animals/1/owner), its linkage (/animals/1/relationships/owner), and her pets (/owners/angela/pets). A per-route deny is not a record boundary." (`/owners/angela/pets` is refused under the classes above, because `OwnerAccess` denies every route whose `recordId` is `angela`.)
+
+To keep a record private, every model that can reach it through a relationship needs its own rule, in its own access class, for its record routes, its relationship routes and its `?include=` responses. The ORM does not enforce a boundary across models for you, so verify each of those routes against a running server.
 
 ## Transforms
 

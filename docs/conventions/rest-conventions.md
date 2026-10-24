@@ -170,7 +170,7 @@ Middleware functions are called with `this` bound to the request class instance,
 
 ## How do I…
 
-Each answer names the sample that shows it. `test/integration/sample-patterns-test.ts` in abofs/stonyx-rest-server serves every sample below over HTTP and asserts the behaviour described.
+Each answer names the sample that shows it. The integration tests in abofs/stonyx-rest-server serve every sample below over HTTP and assert the behaviour described: `test/integration/sample-patterns-test.ts` for `base/api-request.ts`, `accounts.ts` and `widgets.ts`, and `test/integration/rest-server-test.ts` for `public.ts`.
 
 **Run the same check (a version gate, say) in front of every route of many request classes?** Put it in a base class that extends `Request`. Middleware added to `this.expressInstance` in its constructor runs before every route of every subclass, and before `auth`. It may be async, and it owns the response, so it can send any status and body. Sample: [`base/api-request.ts`](https://github.com/abofs/stonyx-rest-server/blob/dev/test/sample/requests/base/api-request.ts).
 

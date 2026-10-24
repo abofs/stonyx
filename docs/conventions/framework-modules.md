@@ -168,7 +168,13 @@ Utility library organized by domain. Always check here before using Node built-i
 - `confirm(question)` — yes/no prompt, returns boolean
 - `prompt(question)` — free-text input, returns string
 
+### Fuzzy matching (`@stonyx/utils/fuzzy-match`)
+
+- default export `FuzzyMatch` class: `new FuzzyMatch(options?)`, then `normalize(name)`, `similarity(nameA, nameB)`, `findBestMatch(nameA, nameB, entries, threshold?)`
+
 File issues on `stonyx-utils` for any gaps rather than adding workarounds or npm dependencies.
+
+**Reference to copy:** `test/sample/` in [abofs/stonyx-utils](https://github.com/abofs/stonyx-utils/tree/dev/test/sample), one file per import path (`file.ts`, `object.ts`, `string.ts`, `date.ts`, `promise.ts`, `prompt.ts`, `fuzzy-match.ts`). The test suite runs them against the built package.
 
 ## `@stonyx/events`
 
@@ -180,6 +186,8 @@ All pub/sub event handling. Never create custom event emitters.
 - `unsubscribe(event, callback)` — remove listener
 - `emit(event, ...args)` — fire event
 - `clear(event)` / `reset()` — cleanup
+
+**Reference to copy:** [`test/sample/convenience.ts`](https://github.com/abofs/stonyx-events/blob/dev/test/sample/convenience.ts) (the functions above) and [`test/sample/class.ts`](https://github.com/abofs/stonyx-events/blob/dev/test/sample/class.ts) (the default-export `Events` class) in abofs/stonyx-events.
 
 ## `@stonyx/cron`
 
@@ -199,7 +207,7 @@ All scheduled and interval tasks. Never use raw `setInterval` or `setTimeout` fo
 
 Three schedule kinds: `every` (interval), `cron` (expression), `at` (one-shot).
 
-See [Cron Conventions](./cron-conventions.md) for full details.
+See [Cron Conventions](./cron-conventions.md) for full details. **Reference to copy:** [`test/sample/payload.ts`](https://github.com/abofs/stonyx-cron/blob/dev/test/sample/payload.ts) in abofs/stonyx-cron.
 
 Configurable via `config/environment.js`:
 
@@ -211,9 +219,23 @@ export default {
 
 ## `@stonyx/sockets`
 
-WebSocket handlers. Class ordering: static properties → `server()` method → `client()` method.
+WebSocket handlers, one class per file in `socket-handlers/` (config `sockets.handlerDir`). Class ordering: static properties → `server` hook → `client` hook.
 
-Exports: `SocketServer`, `SocketClient`, `Handler`, `Sockets`
+Exports (the root re-exports the three classes as named exports; each also has its own subpath):
+
+```js
+import Sockets, { SocketServer, SocketClient, Handler } from '@stonyx/sockets';
+```
+
+or, one class per subpath:
+
+```js
+import SocketServer from '@stonyx/sockets/server';
+import SocketClient from '@stonyx/sockets/client';
+import Handler from '@stonyx/sockets/handler';
+```
+
+**Reference to copy:** [`test/sample/socket-handlers/echo.ts`](https://github.com/abofs/stonyx-sockets/blob/dev/test/sample/socket-handlers/echo.ts) and [`auth.ts`](https://github.com/abofs/stonyx-sockets/blob/dev/test/sample/socket-handlers/auth.ts) in abofs/stonyx-sockets. They import `Handler` from `@stonyx/sockets/handler`, and the integration tests run against them.
 
 ## `@stonyx/discord`
 
@@ -234,9 +256,22 @@ import { SlashCommandBuilder } from '@stonyx/discord/base';
 
 ## `@stonyx/oauth`
 
-OAuth providers. Class ordering: constructor with `super()` → async methods → transform methods.
+OAuth providers. A custom provider extends the default export of `@stonyx/oauth/oauth-flow`. Class ordering: constructor with `super()` → async methods → transform methods.
 
-Key methods: `getAuthorizationUrl()`, `handleCallback()`, `getSession()`, `logout()`
+Exports:
+
+```js
+import OAuth, { STATE_TTL_MS, BINDING_VALUE_BYTES } from '@stonyx/oauth';
+import OAuthFlow from '@stonyx/oauth/oauth-flow';
+import AuthRequest from '@stonyx/oauth/auth-request';
+import SessionManager from '@stonyx/oauth/session-manager';
+import TokenManager from '@stonyx/oauth/token-manager';
+import DiscordProvider from '@stonyx/oauth/providers/discord';
+```
+
+`@stonyx/oauth` and `@stonyx/oauth/auth-request` import `stonyx/log` (the root also `stonyx/config`), so they can only be imported inside a booted Stonyx app. Key methods of the `OAuth` singleton: `getAuthorizationUrl()`, `handleCallback()`, `getSession()`, `logout()`.
+
+**Reference to copy:** [`test/sample/providers/mock.ts`](https://github.com/abofs/stonyx-oauth/blob/dev/test/sample/providers/mock.ts) in abofs/stonyx-oauth, a custom provider built on `@stonyx/oauth/oauth-flow`.
 
 ## `@abofs/code-conventions`
 

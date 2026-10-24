@@ -155,3 +155,24 @@ export default {
 - **Simple recurring callback** → `Cron.register(key, callback, interval)`
 - **Scheduled jobs with history, CRUD, AI input** → `CronService`
 - **Never use raw `setInterval` or `setTimeout`** for recurring work
+
+## How do I…
+
+Each answer names the definition in [`test/sample/payload.ts`](https://github.com/abofs/stonyx-cron/blob/dev/test/sample/payload.ts) (abofs/stonyx-cron) that shows it.
+
+**Run a callback every N seconds?** `register(key, callback, intervalSeconds, runOnInit)` on the `Cron` singleton, as in [Legacy API](#legacy-api-simple-intervals). Sample: `legacyHealthCheck` and `legacyBackup`.
+
+**Run a job at a time of day, in a time zone?** `CronService.add` with `schedule: { kind: 'cron', expr, tz }`. Sample: `dailyMorning`.
+
+**Run a job once, at a given time?** `CronService.add` with `schedule: { kind: 'at', at }` and an ISO-8601 string. Sample: `oneShot`.
+
+**Keep a job defined but stop it from running?** Add it with `enabled: false`; `list()` omits it unless you pass `{ includeDisabled: true }`. Sample: `disabled`.
+
+**Accept a loosely shaped job from an AI tool call?** Pass it to `CronService.add` as is; it is normalized (see [AI Input Normalization](#ai-input-normalization)). Sample: `aiFlat`.
+
+## Not a gap, by design
+
+These are absent on purpose. Each has an intended pattern, so a report that one is missing is a usage question (see [Before you report a gap or bug](./index.md#before-you-report-a-gap-or-bug)).
+
+- **No `crons/` directory.** The cron module discovers no files. A job exists once your code calls `register` or `CronService.add`, so put those calls in code that runs at startup. `stonyx test` does not import `app.js`, so a test that needs a job registers it itself.
+- **The legacy `Cron` has no history, CRUD or cron expressions.** It runs callbacks on an interval. For anything more, use `CronService` from `@stonyx/cron/service` (see [When to Use Which](#when-to-use-which)).

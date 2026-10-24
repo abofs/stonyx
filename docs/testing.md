@@ -64,3 +64,21 @@ test/
   integration/
     api-test.js
 ```
+
+## Booting Stonyx More Than Once in One Process
+
+`Stonyx` is a process-global singleton. Once an instance exists, `new Stonyx(...)` returns that first instance and ignores the new config, and `Stonyx.initialized` stays `true`. A test file that boots Stonyx twice in-process will therefore assert every later case against the first boot's config unless it resets the singleton between boots:
+
+```js
+import Stonyx from 'stonyx';
+
+hooks.afterEach(() => {
+  Stonyx.instance = undefined;
+  Stonyx.initialized = false;
+  Stonyx.modulePromises = {};
+});
+```
+
+With that teardown, two successive in-process boots produce distinct configs. `Stonyx.modulePromises` is reset for completeness only: the registry `waitForModule` reads is module-level state inside `src/modules.ts`, which this teardown does not touch. `loadModules` rebuilds the entry for each `@stonyx/*` dependency on every boot.
+
+Running each boot in its own subprocess is stronger: it also isolates `process.env` and the ESM module registry, and it does not depend on a teardown being called. `test/unit/standalone-transform-test.ts` uses that approach, through `test/helpers/boot-stonyx.ts`.

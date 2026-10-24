@@ -14,7 +14,7 @@
  * assert five of these six cases against boot #1's config.
  *
  * A subprocess is not the only way to avoid that, and this file should not say
- * it is. `docs/agents/qa-test-engineer.md` documents a teardown — reset
+ * it is. `docs/testing.md` documents a teardown — reset
  * `Stonyx.instance`, `Stonyx.initialized` and `Stonyx.modulePromises` — and it
  * measurably works: two successive in-process boots under that teardown produce
  * distinct configs (`[restServer, rootPath]`, then `[port, rootPath, someFlag]`).

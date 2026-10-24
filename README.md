@@ -33,8 +33,8 @@ Stonyx reads `config/environment.ts` (preferred) or `config/environment.js`, ini
 
 ## Exports
 
-| Import | Exports |
-|--------|---------|
+| Import path | What it exports |
+| :--- | :--- |
 | `stonyx` | `Stonyx` class (default), `waitForModule(name)`; type `StoynxConfig` |
 | `stonyx/config` | The Stonyx config object (default), bound at first import |
 | `stonyx/log` | The Chronicle logger (default), bound at first import |

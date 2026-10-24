@@ -6,6 +6,8 @@ Universal rules that apply to every Stonyx project. Section-specific conventions
 
 Each module's `test/sample/` is its canonical usage reference: the module's own test suite loads and runs those files, so they show what works. Before you report that a module is missing something, or that it is broken:
 
+**A security issue is the exception.** If it is an auth or access bypass, a data leak, or anything else an attacker could use, never open a public issue and never publish a repro. Report it privately: use the repo's **Security** tab → **Report a vulnerability** where GitHub private vulnerability reporting is enabled, and otherwise contact the maintainers privately. Steps 1 and 2 still apply; step 3's details go in the private report.
+
 1. **Check whether it is a known pattern.** Read the module's **How do I…** and **Not a gap, by design** sections ([REST](./rest-conventions.md#how-do-i), [ORM](./orm-conventions.md#how-do-i), [Discord](./discord-conventions.md#how-do-i), [Cron](./cron-conventions.md#how-do-i)), and its `test/sample/` directory ([Testing Conventions](./testing-conventions.md#sample--fixture-files) lists them). An absent feature listed there has an intended pattern.
 2. **Reproduce it against the module's own sample, with idiomatic, documented usage.** Start from a sample file in a clone of the module's `dev` branch, change only what shows the problem, and run it with the module's `pnpm test` (best: as a failing test). Import only what the package exports and the docs show: no `src/` or `dist/` paths, no undocumented properties. If you cannot clone the module (abofs/stonyx-discord is private), reproduce in a minimal app against the published package, starting from the README's examples, which ship in the package.
 3. **Cite the sample and the repro in the report:** the sample path (`abofs/<module>/test/sample/...`) and commit, the minimal change or failing test, the command you ran, and the expected and actual output.
@@ -48,7 +50,7 @@ await db.writeCollection('animals', animals);
 ## Section Conventions
 
 - [Project Structure](./project-structure.md) — directory layout, file organization, config conventions
-- [Framework Modules](./framework-modules.md) — when to use which `@stonyx/*` module
+- [Framework Modules](./framework-modules.md) — when to use which `@stonyx/*` module, and the module README, sample and type conventions
 - [Cron Conventions](./cron-conventions.md) — legacy intervals and the CronService API
 - [ORM Conventions](./orm-conventions.md) — models, serializers, access control, transforms, views, hooks, store
 - [REST Conventions](./rest-conventions.md) — REST server request classes and handlers

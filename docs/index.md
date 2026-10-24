@@ -12,7 +12,7 @@
 
 ## Conventions
 
-- [Conventions](conventions/index.md) — Universal rules and module-specific conventions
+- [Conventions](conventions/index.md) — Universal rules and module-specific conventions, including what to check [before you report a gap or bug](conventions/index.md#before-you-report-a-gap-or-bug)
 
 ## Reference
 

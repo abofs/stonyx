@@ -52,7 +52,7 @@ function specsInCommandLine(rawLine: string): { command: string; spec: string }[
 function extractInstallSpecs(markdown: string, file: string): InstallSpec[] {
   const specs: InstallSpec[] = [];
   let inFence = false;
-  markdown.split('\n').forEach((text, index) => {
+  markdown.split(/\r?\n/).forEach((text, index) => {
     const line = index + 1;
     if (/^\s*(```|~~~)/.test(text)) {
       inFence = !inFence;

@@ -24,7 +24,7 @@ Most other framework imports throw the same way, because they import `stonyx/log
 
 The reference is `test/sample/scripts/deploy-commands.js` in the `@stonyx/discord` repository (abofs/stonyx-discord, private; the file is not in the npm package). It imports `readdir` from `node:fs/promises` (it assumes `@stonyx/utils` is not an app dependency), reports with `console.log` / `console.error`, and imports only `REST` and `Routes` from `@stonyx/discord/base`. Keep such scripts out of the directories a module discovers (`requests/`, `discord-commands/` and so on), for example in `scripts/`.
 
-For a data fix on the JSON database, use `StandaloneDB` from `@stonyx/orm/standalone-db`, which reads and writes the db files without booting Stonyx. Pass the mode your app uses: `StandaloneDB` defaults to `mode: 'directory'`, while the ORM defaults to `orm.db.mode: 'file'`.
+For a data fix on the JSON database, use `StandaloneDB` from `@stonyx/orm/standalone-db`, which reads and writes the db files without booting Stonyx. Pass the mode your app uses: `StandaloneDB` defaults to `mode: 'directory'`, while the ORM defaults to `orm.db.mode: 'file'`. Run it while the app is stopped: a running app holds the data in memory, and its next save (an autosave, when `orm.db.autosave` is `'true'` or `'onUpdate'`) writes that copy back over the script's edit.
 
 ```js
 import StandaloneDB from '@stonyx/orm/standalone-db';

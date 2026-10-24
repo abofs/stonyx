@@ -228,20 +228,39 @@ Register hooks by **calling** `beforeHook(operation, model, handler)` / `afterHo
 import { beforeHook, afterHook } from '@stonyx/orm';
 ```
 
-Nothing discovers hook files: the ORM does not load a `hooks/` directory, so a file there runs only if your code imports it. Put the calls in one module of their own (for example `hooks.js`) and import it from `app.js`. `stonyx test` never imports `app.js`, so hooks registered only there are absent from the whole test suite: also import that module from every test file that relies on a hook. A module runs once per process however many files import it, so the hooks are not registered twice.
+Nothing discovers hook files: the ORM does not load a `hooks/` directory, so a file there runs only if your code imports it. Put the calls in a function exported from one module of their own (for example `registerHooks()` in `hooks.js`) and call it from `app.js`. `stonyx test` never imports `app.js`, so hooks registered only there are absent from the whole test suite. A test that relies on a hook calls `registerHooks()` in `beforeEach` and `clearAllHooks()` in `afterEach`, as the ORM README's [Testing Hooks](https://github.com/abofs/stonyx-orm/blob/dev/README.md#testing-hooks) section advises. Keep the pair together: calls at the top level of `hooks.js` run once per process, so the first `clearAllHooks()` removes them for every later test, and `registerHooks()` without `clearAllHooks()` registers the hook again before each test.
 
 ```js
 // hooks.js
 import { beforeHook } from '@stonyx/orm';
 
-beforeHook('create', 'animal', context => {
-  if (!context.body.data.attributes.name) return 400;
-});
+export function registerHooks() {
+  beforeHook('create', 'animal', context => {
+    if (!context.body.data.attributes.name) return 400;
+  });
+}
 ```
 
 ```js
-// app.js, and every test file that relies on a hook
-import './hooks.js';
+// app.js
+import { registerHooks } from './hooks.js';
+
+registerHooks();
+```
+
+```js
+// test/unit/animal-hooks-test.js
+import QUnit from 'qunit';
+import { clearAllHooks } from '@stonyx/orm';
+import { registerHooks } from '../../hooks.js';
+
+const { module } = QUnit;
+
+module('animal hooks', function (hooks) {
+  hooks.beforeEach(() => registerHooks());
+  hooks.afterEach(() => clearAllHooks());
+  // ...tests...
+});
 ```
 
 The hook API, the context object and examples are in the [Lifecycle Hooks](https://github.com/abofs/stonyx-orm/blob/dev/README.md#lifecycle-hooks) section of the ORM README.

@@ -37,7 +37,7 @@
     "test": "pnpm build && node --import tsx node_modules/qunit/bin/qunit.js 'test/**/*-test.ts'",
     "error": "echo \"Error: no error handling\" && exit 1",
     "postinstall": "node scripts/postinstall.js",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "pnpm build && pnpm test"
   },
   "repository": {
     "type": "git",

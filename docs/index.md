@@ -1,20 +1,69 @@
-# Stonyx Documentation
+# Stonyx Architecture
 
-## Guides
+## Overview
 
-- [CLI](cli.md) — Commands, usage, and module-contributed commands
-- [Configuration](configuration.md) — Environment config, module config, and test overrides
-- [Modules](modules.md) — Module discovery, sync vs async, and official modules
-- [Lifecycle](lifecycle.md) — Startup/shutdown hooks and signal handling
-- [Logging](logging.md) — Color-coded logging via Chronicle
-- [Testing](testing.md) — Running tests, config overrides, and integration helpers
-- [Developing Modules](developing-modules.md) — Guide for building custom Stonyx modules
+Stonyx is the core framework package of the Stonyx ecosystem: a lightweight, plug-and-play base for Node.js backend applications. On its own it does four things — discover and boot `@stonyx/*` modules from a consumer project's dependencies, run startup/shutdown lifecycle hooks around them, load and merge a project's configuration, and provide a single color-coded logger (via the `@stonyx/logs` dependency) that both the framework and its modules write through. It also ships the `stonyx` CLI binary, which scaffolds new projects, bootstraps and runs an application, and runs its test suite. Everything else in the ecosystem (`@stonyx/orm`, `@stonyx/rest-server`, `@stonyx/cron`, etc.) is an optional module that this package discovers and loads; this repository owns none of their behavior.
 
-## Conventions
+The package is published to npm as `stonyx`, written in TypeScript, compiled to `dist/` with `tsc`, and consumed by applications as an npm dependency (and, via subpath exports, imported piecemeal — `stonyx/config`, `stonyx/log`, `stonyx/lifecycle`, `stonyx/test-helpers`).
 
-- [Conventions](conventions/index.md) — Universal rules and module-specific conventions, including what to check [before you report a gap or bug](conventions/index.md#before-you-report-a-gap-or-bug)
+## Areas
 
-## Reference
+The source tree (`src/`) separates cleanly along the same lines the docs are organized by. Each area below names what it owns and where it lives; most link out to an existing, verified doc for detail rather than repeating it here.
 
-- [API Reference](api.md) — Public exports and class documentation
-- [Release](release.md) — Release process
+**Core orchestration — the `Stonyx` class.** `src/main.ts` is the composition root: a process-global singleton (`Stonyx.instance`) that ties together configuration, module loading, and logging. Its constructor takes the consumer's merged environment config and the project root path; `start()` validates both are present, applies the standalone-module config transform (via `src/util/resolve-module-name.ts`) so a `@stonyx/*` package can run its own dev server or tests under the same config shape a consumer app would pass it, deep-merges `NODE_ENV=test` overrides from `test/config/environment.*` in place, constructs the one `Chronicle` logger for the process, and awaits `loadModules`. The static getters `Stonyx.config` and `Stonyx.log` throw `Stonyx has not been initialized yet` until `start()` has completed — that invariant is what `src/exports/config.ts` and `src/exports/log.ts` rely on. There is no standalone doc for this area; it is small enough to live here.
+
+**Module discovery and loading.** `src/modules.ts`, `src/util/duplicate-core.ts`, and `src/util/resolve-module-name.ts` own finding, validating, and instantiating `@stonyx/*` packages. The loader scans the consumer's `package.json#devDependencies` for `@stonyx/`-prefixed names, keeps only those carrying the `stonyx-module` keyword, and — before importing anything — runs a pre-flight that refuses to boot if any discovered module resolves a different physical copy of `stonyx` than the one currently running (the "duplicate core" invariant, abofs/stonyx#108). Modules additionally carrying `stonyx-async` get their own `config/environment.{ts,js}` defaults merged under the consumer's config, a Chronicle log type if `logColor` is set, and have `init()` awaited; sync modules are only instantiated. See [docs/modules.md](modules.md) — verified against `src/modules.ts` and `src/util/duplicate-core.ts`, still accurate.
+
+**Configuration.** `src/util/import-config.ts`, `src/exports/config.ts`, the `config/environment copy.{ts,js}` templates, and `scripts/postinstall.js` own resolving and loading `config/environment.{ts,js}` (and, under `NODE_ENV=test`, `test/config/environment.{ts,js}`), preferring `.ts` over `.js` when both exist, and distinguishing "config not found" (non-fatal for test overrides) from "config present but not loadable" (always a hard error). `scripts/postinstall.js` seeds a starter config file from the shipped templates, picking `.ts` or `.js` by whether the consumer's project root has a `tsconfig.json`. See [docs/configuration.md](configuration.md) — verified against `src/util/import-config.ts` and `scripts/postinstall.js`, still accurate.
+
+**Lifecycle hooks.** `src/lifecycle.ts` owns the two sequencing guarantees modules get around application start and stop: `runStartupHooks` calls each module's optional `startup()` in load order, after every module has finished `init()` and before the application entry point runs; `runShutdownHooks` calls each module's optional `shutdown()` in *reverse* load order, catching and logging (not rethrowing) any one hook's error so the remaining hooks still run. `src/cli/serve.ts` wires `runShutdownHooks` to `SIGTERM`/`SIGINT` behind an idempotency guard. See [docs/lifecycle.md](lifecycle.md) — verified against `src/lifecycle.ts`, matches exactly.
+
+**Logging.** `src/exports/log.ts` and `src/types/stonyx-logs.d.ts` own exposing the single `Chronicle` logger instance (from the `@stonyx/logs` dependency, constructed once in `src/main.ts`) as the `stonyx/log` subpath export, plus the convention that any config object carrying a `logColor` key becomes a Chronicle log type — `configureUserLogs` in `src/main.ts` for project-level config keys, `configureLog` in `src/modules.ts` for module config. `stonyx/log` is bound once at first import and throws before Stonyx has initialized. See [docs/logging.md](logging.md) — verified against `src/exports/log.ts` and `src/main.ts`, still accurate.
+
+**CLI and module-contributed commands.** `src/cli.ts` and `src/cli/*` own the `stonyx` binary's command dispatch: the built-in commands (`serve`, `test`, `new`, `help`, with `s`/`t`/`n`/`h` aliases), loading `.env` via `process.loadEnvFile()` before any command runs, and discovering commands a `@stonyx/*` module contributes through a `./commands` package.json export (`src/cli/load-commands.ts`), each optionally requesting a full Stonyx bootstrap before it runs. This is the package's `bin` entry point (`dist/cli.js`, per `package.json#bin`). See [docs/cli.md](cli.md) — verified against `src/cli.ts`, `src/cli/serve.ts`, `src/cli/test.ts`, `src/cli/new.ts`, `src/cli/load-commands.ts`, and `src/cli/help.ts`, still accurate.
+
+**Testing infrastructure.** `src/exports/test-helpers.ts`, `src/cli/test.ts`, and `src/cli/test-setup.ts` own how both this repo's own suite and a scaffolded consumer app run tests against a booted Stonyx: `stonyx test` spawns QUnit with `NODE_ENV=test` and a `--import` setup file, and `setupIntegrationTests` (the `stonyx/test-helpers` export) adds a QUnit `before` hook that awaits `Stonyx.ready` for tests that need modules fully initialized. See [docs/testing.md](testing.md) — verified by actually running the suite (see Build, Run, Test below), still accurate.
+
+## Build, Run, Test
+
+Verified directly against this checkout on 2026-11-02, Node v24.13.0 (matches `.nvmrc` exactly) and pnpm 10.23.0. No environment variables, database, or external service is required for any of the steps below — `docs/testing.md` and the test tree confirm this (the test suite builds fixture projects under `os.tmpdir()` and stubs `Chronicle` rather than touching anything external).
+
+1. **Install** — `pnpm install --frozen-lockfile`. Succeeded; `pnpm-lock.yaml` was **not** modified (the lockfile was already up to date, so there was no need to fall back to a plain `pnpm install`).
+2. **Build** — `pnpm build` (`tsc`, `src/` → `dist/`). Succeeded with no errors or warnings.
+3. **Typecheck** — `pnpm typecheck` (`tsc --noEmit && tsc --noEmit -p tsconfig.test.json`). **Fails if run cold, before step 2 has ever produced a `dist/`**: `src/cli/test-setup.ts`, `src/exports/config.ts`, `src/exports/log.ts`, `src/exports/test-helpers.ts`, and three files under `test/unit/` self-import the package's own public subpaths (`stonyx`, `stonyx/config`, `stonyx/log`, `stonyx/lifecycle`), which `package.json#exports` resolves to `./dist/*.d.ts`. With no `dist/` yet, `tsc` reports `TS2307: Cannot find module 'stonyx'` for each of those seven files. Running `pnpm build` once (or just running `pnpm test`, which always builds first) fixes it: with `dist/` present, `pnpm typecheck` passes clean. This is a real ordering prerequisite worth knowing about before onboarding CI around this script — it is not a bug, and nothing here attempts to fix it.
+4. **Test** — `pnpm test` (`pnpm build && node --import tsx node_modules/qunit/bin/qunit.js 'test/**/*-test.ts'`). Builds (as in step 2), then runs the full suite: **183 passed, 0 failed, 0 skipped.**
+
+In short: install, build, and test all stood up cleanly end to end on the first try. The only wrinkle — `typecheck` depends on `build` having run at least once — is a real, reproducible ordering requirement, not a flake.
+
+## Delivery
+
+Stonyx ships to exactly one platform: the npm registry, as the package `stonyx`. There is no web, iOS, or Android surface of its own. It is consumed two ways by a downstream application:
+
+- **As a library dependency.** Per `docs/modules.md`'s own guidance (which this matches), the application puts `stonyx` in its own `dependencies` (not `devDependencies`) and imports from it — the default export (the `Stonyx` class), and the `stonyx/config`, `stonyx/log`, `stonyx/lifecycle`, `stonyx/test-helpers` subpaths.
+- **As a CLI.** `package.json` declares `"bin": { "stonyx": "./dist/cli.js" }`, giving installed consumers a `stonyx` executable (`stonyx new`, `stonyx serve`, `stonyx test`, `stonyx help`).
+
+**Known discrepancy, confirmed (abofs/stonyx#123).** The issue's claim — that the npm `latest` dist-tag ships no `stonyx` binary — checks out as real, verified both against this repo's `package.json` and against the live registry on 2026-11-02:
+
+- `npm view stonyx dist-tags` → `latest: 0.2.2`, `beta: 0.2.3-beta.107`, `alpha: 0.2.3-alpha.83`.
+- `npm view stonyx@latest bin` → **empty** (no `bin` field at all on the published `0.2.2`).
+- `npm view stonyx@beta bin` → `{ "stonyx": "dist/cli.js" }`, matching this repo's own `package.json#bin` exactly.
+
+So installing the package by name alone, without naming the `beta` channel, resolves `0.2.2`, which has no `stonyx` binary to run and — per `docs/modules.md`'s own measurement — a postinstall that fails outright (`0.2.2` imports `@stonyx/utils`, which it never declared as a dependency). Every install instruction in this repo's own README and docs is required to name the `beta` channel specifically — that requirement is enforced by a real test, `test/unit/docs/install-channel-test.ts`, which scans every fenced/inline code span in `README.md` and `docs/**.md` and fails if any `stonyx` install command names anything other than `@beta`. This documentation was written to comply with that test. The fix (promoting a stable release) is a release decision tracked on the issue itself and is out of scope here.
+
+## Dependencies
+
+| Package | Version here | Kind | What it owns |
+|---|---|---|---|
+| `@stonyx/utils` | `0.2.3-beta.28` | dependency | Shared utility functions for the whole framework: atomic file I/O (`createFile`/`readFile`/`updateFile`/directory helpers), object manipulation (`mergeObject`, `get`/`getOrSet`), string case conversion, date/timestamp helpers, promise helpers, interactive CLI prompts (`confirm`/`prompt`), and fuzzy name matching. It has zero runtime dependencies of its own (per its own `docs/project-structure.md`). |
+| `@stonyx/logs` | `1.0.1-beta.22` | dependency | Color-coded console/file logging via a `Chronicle` class (internally still named `Log` — see `abofs/stonyx-logs#11`), built on `chalk`, with `defineType()` for registering new log types and optional async file writes. |
+| `qunit` | `^2.24.1` | devDependency | The test runner — test registration, assertions, and run reporting — for both this repo's own suite and every project `stonyx new` scaffolds. |
+| `sinon` | `^21.0.0` | devDependency | Stubs/spies used in a handful of CLI tests (`test/unit/cli/help-test.ts`, `serve-test.ts`, `load-commands-test.ts`). |
+| `typescript` | `^5.8.3` (resolved `5.9.3`) | devDependency | Compiles `src/` to `dist/` (`pnpm build`) and type-checks source and tests (`pnpm typecheck`). |
+| `tsx` | `^4.21.0` | devDependency | The `--import` loader `pnpm test` uses to run the TypeScript test files directly under Node without a separate test compile step. |
+| `@types/node`, `@types/qunit`, `@types/sinon` | — | devDependency | Type declarations only; no runtime behavior. |
+
+**Where this repo's code actually touches `@stonyx/utils` and `@stonyx/logs`**, so the boundary is explicit: `src/modules.ts` imports `readFile`, `kebabCaseToCamelCase`, and `mergeObject` from `@stonyx/utils`; `src/cli/new.ts` imports `confirm`, `prompt`, and file/directory helpers from `@stonyx/utils`; `scripts/postinstall.js` imports `copyFile` and `createDirectory` from `@stonyx/utils/file`. `src/main.ts` constructs the one `Chronicle` instance per process from `@stonyx/logs`, and both `configureLog` (in `src/modules.ts`) and `configureUserLogs` (in `src/main.ts`) call only `chronicle.defineType(...)` on it.
+
+**The point of drawing that line**: this repo's own test suite should verify that it *calls* those dependencies correctly (e.g., that `loadModules` calls `chronicle.defineType` with the right args), not re-verify behavior those packages already own (e.g., that `updateFile` is atomic, that `mergeObject`'s deep-merge semantics are correct, or that Chronicle's color resolution or file-write path works). `test/helpers/module-fixture.ts`'s `stubChronicle()` exists specifically to assert the former without exercising the real `Chronicle` write path.
+
+**Dependency gap observed**: neither `@stonyx/utils` nor `@stonyx/logs` publishes an official test double or fixture-builder for consumers. This repo's own test suite has to hand-build both: `stubChronicle()` in `test/helpers/module-fixture.ts` fakes the `Chronicle` interface by hand (cast `as unknown as Chronicle`) instead of using a test double `@stonyx/logs` ships, and the same file hand-writes fake `@stonyx/*` module packages on disk (`installModule`, `moduleSource`) rather than being handed a canonical fixture by any dependency. Anyone who wants to test the module-loading pathway in isolation from a real `@stonyx/*` package has to build these fakes themselves.
